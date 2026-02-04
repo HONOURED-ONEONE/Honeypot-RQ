@@ -1,0 +1,8 @@
+# Minimal state constants (kept for clarity)
+
+INIT = "INIT"
+MONITORING = "MONITORING"
+ENGAGED = "ENGAGED"
+READY_TO_REPORT = "READY_TO_REPORT"
+REPORTED = "REPORTED"
+CLOSED = "CLOSED"

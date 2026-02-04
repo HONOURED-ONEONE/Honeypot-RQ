@@ -1,0 +1,32 @@
+Commands to run locally:
+
+1) Start Redis:
+   docker compose up -d
+
+2) Configure env:
+   cp .env.example .env
+   # edit .env
+
+3) Install deps:
+   python -m venv .venv
+   source .venv/bin/activate
+   pip install -r requirements.txt
+
+4) Run API:
+   ./scripts/run_api.sh
+
+5) Run worker (new terminal):
+   source .venv/bin/activate
+   export $(grep -v '^#' .env | xargs)
+   ./scripts/run_worker.sh
+
+6) Test request:
+   curl -X POST http://localhost:8000/api/honeypot \
+     -H 'Content-Type: application/json' \
+     -H 'x-api-key: YOUR_API_KEY' \
+     -d '{
+       "sessionId": "demo-1",
+       "message": {"sender": "scammer", "text": "Your bank account will be blocked today. Verify immediately.", "timestamp": 1770005528731},
+       "conversationHistory": [],
+       "metadata": {"channel": "SMS", "language": "English", "locale": "IN"}
+     }'
