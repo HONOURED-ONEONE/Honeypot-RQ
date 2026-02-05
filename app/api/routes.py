@@ -10,31 +10,18 @@ from app.api.normalize import normalize_honeypot_payload
 router = APIRouter()
 
 
-@router.api_route(
-    "/api/honeypot",
-    methods=["POST", "GET"],
-    response_model=HoneypotResponse,
-    dependencies=[Depends(require_api_key)],
-)
-async def honeypot(request: Request, payload: Any = Body(None)):
-    """
-    GUVI tester may send:
-      - POST with empty body
-      - POST with non-object JSON
-      - GET without body
-    We accept all of these and normalize to our canonical HoneypotRequest.
-    """
+async def _handle_honeypot(request: Request, payload: Any) -> HoneypotResponse:
+    """Accept ANY payload (or no payload) and normalize into HoneypotRequest."""
 
-    # If FastAPI couldn't parse JSON into 'payload' (missing body), try reading it
+    # If body missing or couldn't be parsed into payload, try reading it manually
     if payload is None:
         try:
             payload = await request.json()
         except Exception:
             payload = {}
 
-    # Convert non-dict JSON to dict wrapper so our normalizer can handle it
+    # If payload is not a dict, wrap or ignore
     if not isinstance(payload, dict):
-        # If it's a string, treat it as message text; else just empty
         if isinstance(payload, str):
             payload = {"message": payload}
         else:
@@ -44,3 +31,25 @@ async def honeypot(request: Request, payload: Any = Body(None)):
     req = HoneypotRequest.model_validate(normalized)
     reply = handle_event(req)
     return HoneypotResponse(status="success", reply=reply)
+
+
+# ✅ Main endpoint (what the spec expects)
+@router.api_route(
+    "/api/honeypot",
+    methods=["POST", "GET"],
+    response_model=HoneypotResponse,
+    dependencies=[Depends(require_api_key)],
+)
+async def honeypot_api(request: Request, payload: Any = Body(None)):
+    return await _handle_honeypot(request, payload)
+
+
+# ✅ Root alias (some endpoint testers keep calling only /)
+@router.api_route(
+    "/",
+    methods=["POST"],
+    response_model=HoneypotResponse,
+    dependencies=[Depends(require_api_key)],
+)
+async def honeypot_root(request: Request, payload: Any = Body(None)):
+    return await _handle_honeypot(request, payload)
