@@ -7,16 +7,24 @@ def _load_prompt(path: str) -> str:
         return f.read().strip()
 
 
+def _rule_fallback(req) -> str:
+    """Rule-based safe response that keeps the scammer talking."""
+    text = (req.message.text or "").lower()
+    if any(x in text for x in ["otp", "pin", "password"]):
+        return "i can't share otp/pin. send the official website/helpline so i can verify."
+    if "upi" in text:
+        return "ok where exactly do i enter the upi id? can you send it again clearly"
+    if "http" in text or "www." in text or "link" in text:
+        return "the link isn't opening here. can you send the full link again?"
+    return "ok, what exactly do i need to do next?"
+
+
 def generate_agent_reply(req, session) -> str:
     system = _load_prompt("app/llm/prompts/agent_system.txt")
     examples = _load_prompt("app/llm/prompts/examples.txt")
 
-    # Build a compact user prompt
     history = session.conversation[-settings.MAX_CONTEXT_MESSAGES :]
-    hist_lines = []
-    for msg in history:
-        hist_lines.append(f"{msg.get('sender')}: {msg.get('text')}")
-
+    hist_lines = [f"{m.get('sender')}: {m.get('text')}" for m in history]
     meta = req.metadata.model_dump() if req.metadata else {}
 
     user = (
@@ -32,11 +40,10 @@ def generate_agent_reply(req, session) -> str:
         f"Style examples:\n{examples}"
     )
 
-    out = generate_content(system, user, temperature=0.4, max_tokens=80)
-
-    # Ensure we return a short, single message.
-    reply = out.strip()
-    # Trim excessive lines
-    lines = [ln.strip() for ln in reply.splitlines() if ln.strip()]
-    reply = "\n".join(lines[:2])
-    return reply
+    try:
+        out = generate_content(system, user, temperature=0.4, max_tokens=80)
+        reply = (out or "").strip()
+        lines = [ln.strip() for ln in reply.splitlines() if ln.strip()]
+        return "\n".join(lines[:2]) if lines else _rule_fallback(req)
+    except Exception:
+        return _rule_fallback(req)

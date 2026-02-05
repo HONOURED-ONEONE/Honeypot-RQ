@@ -23,21 +23,21 @@ def handle_event(req: HoneypotRequest) -> str:
     session.confidence = float(detection.get("confidence") or 0.0)
     session.scamType = detection.get("scamType")
 
-    # If scam detected, engage agent
     if session.scamDetected:
         if session.state in ("INIT", "MONITORING"):
             session.state = "ENGAGED"
 
-        # Passive intelligence ledger updates from scammer messages only
         if req.message.sender == "scammer":
             update_intelligence_from_text(session, req.message.text)
 
-        # Update agent notes (short)
         session.agentNotes = build_agent_notes(detection)
 
-        reply = generate_agent_reply(req, session)
+        # Never allow LLM exceptions to crash the request
+        try:
+            reply = generate_agent_reply(req, session)
+        except Exception:
+            reply = "ok, what exactly do i need to do next?"
 
-        # Finalize check & enqueue callback
         if should_finalize(session):
             if session.callbackStatus not in ("queued", "sent"):
                 q = get_queue()
@@ -51,7 +51,6 @@ def handle_event(req: HoneypotRequest) -> str:
 
     else:
         session.state = "MONITORING"
-        # Keep conversation alive without revealing detection.
         reply = "ok, what exactly do i need to do?"
 
     save_session(session)
