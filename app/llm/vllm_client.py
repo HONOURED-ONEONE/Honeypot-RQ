@@ -8,7 +8,7 @@ VLLM_BASE_URL = os.getenv("VLLM_BASE_URL", "").rstrip("/")
 VLLM_API_KEY = os.getenv("VLLM_API_KEY", "")
 VLLM_MODEL = os.getenv("VLLM_MODEL", "mistralai/Mistral-Small-3.1-24B-Instruct-2503")
 
-_client = httpx.Client(timeout=30)
+_client = httpx.Client(timeout=90)
 
 
 def _headers() -> dict:
@@ -38,7 +38,7 @@ def chat_completion(system: str, user: str, *, temperature: float = 0.4, max_tok
     }
 
     last_err = None
-    for attempt in range(2):
+    for attempt in range(3):
         try:
             resp = _client.post(url, headers=_headers(), json=payload)
             resp.raise_for_status()
