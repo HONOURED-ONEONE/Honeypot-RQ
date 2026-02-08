@@ -123,19 +123,12 @@ def detect_scam(req, session) -> dict:
     latest_text = req.message.text or ""
 
     user_prompt = (
-        "Classify the latest message.
-"
-        "Conversation context (most recent last):
-"
-        + "
-".join(hist_lines)
-        + "
-
-"
-        f"Latest message:
-{latest_text}
-"
-    )
+    "Classify the latest message.\n"
+    "Conversation context (most recent last):\n"
+    + "\n".join(hist_lines)
+    + "\n\n"
+    f"Latest message:\n{latest_text}\n"
+)
 
     high_signal, hs_reasons, hs_type = _high_signal_flags(latest_text)
 
