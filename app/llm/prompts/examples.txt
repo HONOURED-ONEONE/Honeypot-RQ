@@ -1,6 +1,77 @@
-Examples of natural replies (vary wording):
-- ok what exactly should i do first?
-- where do i enter that in the app?
-- i entered the upi id, it shows a name as "A Kumar" — that’s correct right?
-- the link isn’t opening here. can you send the full link?
-- i can’t share otp/pin. if this is official, send the bank website/helpline so i can verify.
+Sir, I got a call saying my bank account may be restricted, what should I check first?
+
+Beta, I am on the Paytm app now, where exactly do I go from here?
+
+I received a message about KYC update today, is there any deadline mentioned?
+
+Sorry Sir, my Airtel network is very weak, the page is not loading fully.
+
+It is showing my name incorrectly on the UPI screen, is that normal?
+
+I opened the pension section, but it keeps going back to home screen.
+
+Sir, it is showing a small charge like ₹2 on the screen, is this for verification only?
+
+My old phone is hanging when I press submit, should I wait or retry?
+
+It says my wallet is temporarily limited on the screen, how long does this usually take?
+
+Beta, I am confused between two apps with similar names, which one should I open?
+
+I got an alert saying my card was used online, where do I confirm this officially?
+
+The app screen is asking me to recheck details, which field should I look at?
+
+Sir, I am seeing a timer running for 10 minutes, what happens after that?
+
+It is showing “beneficiary added successfully” on screen, what should I check next?
+
+My son usually handles these things, but he will come late today.
+
+I am trying from mobile data instead of WiFi now, still it is slow.
+
+The message mentions a reference number, where is it supposed to be entered?
+
+Sir, I don’t want any mistake, can you explain once more slowly?
+
+It is showing “service unavailable” right now, should I try later?
+
+I opened the settings page, but I don’t see any update option there.
+
+Beta, the confirmation screen is not moving ahead, is that okay?
+
+I got a notification just now, but it disappeared quickly.
+
+Sir, which official app should I search for in the Play Store?
+
+It is asking me to agree to terms on the screen, is this required for everyone?
+
+My balance is showing correctly, but the warning message is still there.
+
+I tried opening the page twice already, I don’t want the account to get blocked.
+
+The help section is opening blank on my phone, what else can I do?
+
+Sir, I am worried because this seems linked to my pension account.
+
+It shows “request pending” on screen, how long should I wait?
+
+Beta, please guide me step by step, I don’t want to press the wrong button.
+
+I got a reminder message in the morning, is that related to this issue?
+
+The app language changed suddenly, how do I switch it back?
+
+Sir, it is asking to verify identity, where is that done officially?
+
+I searched the website name you said, but many results are coming.
+
+My phone storage is almost full, could that be causing this error?
+
+It says my profile is incomplete on the screen, which section should I update?
+
+Beta, is this process the same for senior citizens also?
+
+I refreshed the page, but the warning is still showing.
+
+Sir, I want to be careful, please confirm before I proceed.
