@@ -1,3 +1,4 @@
+import time
 from rq import Retry
 
 from app.api.schemas import HoneypotRequest
@@ -9,6 +10,12 @@ from app.queue.rq_conn import get_queue
 from app.queue.jobs import send_final_callback_job
 from app.llm.detector import detect_scam
 from app.llm.responder import generate_agent_reply
+
+NON_SPAM_REPLY = "ok"
+
+
+def _now_ms() -> int:
+    return int(time.time() * 1000)
 
 
 def handle_event(req: HoneypotRequest) -> str:
@@ -23,35 +30,43 @@ def handle_event(req: HoneypotRequest) -> str:
     session.confidence = float(detection.get("confidence") or 0.0)
     session.scamType = detection.get("scamType")
 
-    if session.scamDetected:
-        if session.state in ("INIT", "MONITORING"):
-            session.state = "ENGAGED"
-
-        if req.message.sender == "scammer":
-            update_intelligence_from_text(session, req.message.text)
-
-        session.agentNotes = build_agent_notes(detection)
-
-        # Never allow LLM exceptions to crash the request
-        try:
-            reply = generate_agent_reply(req, session)
-        except Exception:
-            reply = "ok, what exactly do i need to do next?"
-
-        if should_finalize(session):
-            if session.callbackStatus not in ("queued", "sent"):
-                q = get_queue()
-                q.enqueue(
-                    send_final_callback_job,
-                    session.sessionId,
-                    retry=Retry(max=5, interval=[5, 15, 30, 60, 120]),
-                )
-                session.callbackStatus = "queued"
-                session.state = "READY_TO_REPORT"
-
-    else:
+    # Only engage if scam detected
+    if not session.scamDetected:
         session.state = "MONITORING"
-        reply = "ok, what exactly do i need to do?"
+        save_session(session)
+        return NON_SPAM_REPLY
+
+    if session.state in ("INIT", "MONITORING"):
+        session.state = "ENGAGED"
+
+    if req.message.sender == "scammer":
+        update_intelligence_from_text(session, req.message.text)
+
+    session.agentNotes = build_agent_notes(detection)
+
+    try:
+        reply = generate_agent_reply(req, session)
+    except Exception:
+        reply = "ok sir, kindly guide what exactly i should do next."
+
+    # Store agent reply for multi-turn continuity and repetition control
+    session.totalMessagesExchanged += 1
+    session.conversation.append({
+        "sender": "agent",
+        "text": reply,
+        "timestamp": _now_ms(),
+    })
+
+    if should_finalize(session):
+        if session.callbackStatus not in ("queued", "sent"):
+            q = get_queue()
+            q.enqueue(
+                send_final_callback_job,
+                session.sessionId,
+                retry=Retry(max=5, interval=[5, 15, 30, 60, 120]),
+            )
+            session.callbackStatus = "queued"
+            session.state = "READY_TO_REPORT"
 
     save_session(session)
     return reply
