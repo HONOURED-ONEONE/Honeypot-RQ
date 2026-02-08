@@ -166,17 +166,11 @@ def detect_scam(req, session) -> dict:
             # Borderline confirmation pass only when high-signal exists
             if high_signal and conf >= 0.55:
                 confirm_prompt = (
-                    "STRICT CONFIRMATION:
-"
-                    "Be conservative. Mark scamDetected=true only if there is a clear high-signal indicator.
-"
-                    "Return JSON only.
-
-"
-                    f"Latest message:
-{latest_text}
-"
-                )
+    "STRICT CONFIRMATION:\n"
+    "Be conservative. Mark scamDetected=true only if there is a clear high-signal indicator.\n"
+    "Return JSON only.\n\n"
+    f"Latest message:\n{latest_text}\n"
+)
                 out2 = chat_completion(system, confirm_prompt, temperature=0.0, max_tokens=140)
                 data2 = _extract_json(out2)
 
