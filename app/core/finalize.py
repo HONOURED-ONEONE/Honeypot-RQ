@@ -14,15 +14,34 @@ def _ioc_category_count(session) -> int:
 
 
 def should_finalize(session) -> bool:
-    # Finalize when engagement is deep enough OR session is stale.
-    # Criteria: minimum turns and minimum IOC categories.
-    turns_ok = session.totalMessagesExchanged >= settings.FINALIZE_MIN_TURNS
+    """
+    Decide whether to end engagement and trigger final callback.
+    (Refinement 4: No-progress forcing / Max turns)
+    """
+    if session.state in ("READY_TO_REPORT", "REPORTED", "CLOSED"):
+        return False
+
+    # 1. SCAM DETECTED + MIN IOC CATEGORIES
     iocs_ok = _ioc_category_count(session) >= settings.FINALIZE_MIN_IOC_CATEGORIES
+    if session.scamDetected and iocs_ok:
+        return True
 
-    # Staleness check (worker-safe): if last update older than inactivity timeout
+    # 2. MAX TURNS REACHED
+    if session.totalMessagesExchanged >= settings.BF_MAX_TURNS * 2:
+        return True
+
+    # 3. NO PROGRESS THRESHOLD
+    if session.bf_no_progress_count >= settings.BF_NO_PROGRESS_TURNS * 2:
+        return True
+
+    # 4. REPEAT LIMIT REACHED
+    if session.bf_repeat_count >= settings.BF_REPEAT_LIMIT + 1:
+        return True
+
+    # 5. STALENESS / INACTIVITY
     now = int(time.time())
-    stale = False
     if session.lastUpdatedAtEpoch is not None:
-        stale = (now - session.lastUpdatedAtEpoch) >= settings.INACTIVITY_TIMEOUT_SEC
+        if (now - session.lastUpdatedAtEpoch) >= settings.INACTIVITY_TIMEOUT_SEC:
+            return True
 
-    return (turns_ok and iocs_ok) or stale
+    return False

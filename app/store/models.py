@@ -24,3 +24,14 @@ class SessionState:
     agentNotes: str = ""
     callbackStatus: str = "none"  # none|queued|sent|failed
     lastUpdatedAtEpoch: Optional[int] = None
+
+    # Broken-Flow state + counters
+    bf_state: str = "BF_S0"
+    bf_last_intent: Optional[str] = None
+    bf_repeat_count: int = 0
+    bf_no_progress_count: int = 0
+    bf_policy_refused_once: bool = False
+    bf_secondary_bounce_count: int = 0
+    bf_last_ioc_signature: str = ""
+    bf_recent_intents: List[str] = field(default_factory=list)
+    bf_fallback_used: bool = False

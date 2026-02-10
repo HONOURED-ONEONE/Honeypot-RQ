@@ -6,9 +6,65 @@ from collections import Counter
 
 from app.settings import settings
 from app.llm.vllm_client import chat_completion
+from app.core.broken_flow_constants import *
+from app.observability.logging import log
 
 logger = logging.getLogger("honeypot_agent")
 logger.setLevel(logging.INFO)
+
+# Intent Templates (Template-First Approach)
+INTENT_TEMPLATES = {
+    INT_ACK_CONCERN: [
+        "ok sir, i understand. kindly tell what should i do now.",
+        "acha beta, i am a bit confused but i will try. what is the next step?",
+        "ok, i will check. what exactly do i need to verify first?",
+    ],
+    INT_REFUSE_SENSITIVE_ONCE: [
+        "i can’t share otp or pin. kindly tell which official app or website i should verify on.",
+        "wait sir, it says do not share otp/pin. which official page should i check?",
+        "hmm i can’t send otp/pin. kindly share the official helpline/website to verify.",
+    ],
+    INT_CHANNEL_FAIL: [
+        "the link is not opening on my phone. which official website should i type?",
+        "hmm it says network error here. is there any other way to check?",
+        "wait beta, the page is not loading. what is the official site name?",
+    ],
+    INT_ASK_OFFICIAL_WEBSITE: [
+        "sir, can you tell the official website name? i will type it myself and check.",
+        "acha, what is the exact website address of the bank? i want to be sure.",
+        "hmm, please share the official portal link once, i'll open it in my browser.",
+    ],
+    INT_ASK_OFFICIAL_HELPLINE: [
+        "can you share the official helpline number? i want to talk once to confirm.",
+        "beta, is there any customer care number i can call for this?",
+        "ok, but i want to verify with the official support first. do you have their number?",
+    ],
+    INT_ASK_TICKET_REF: [
+        "sir, what is the ticket reference number for this request?",
+        "do you have any complaint or reference number i can use for tracking?",
+        "acha, please tell the reference id so i can note it down.",
+    ],
+    INT_ASK_DEPARTMENT_BRANCH: [
+        "which department or branch are you calling from exactly?",
+        "can you tell the branch name and your employee id for my record?",
+        "acha beta, which office are you located in? i will check locally.",
+    ],
+    INT_ASK_ALT_VERIFICATION: [
+        "is there any other way to verify without the code? it is not coming.",
+        "hmm, the sms is not arriving. can we verify using my date of birth or something else?",
+        "wait sir, no message is here. what is the alternative step?",
+    ],
+    INT_SECONDARY_FAIL: [
+        "it is still not working sir. maybe some technical issue at your end?",
+        "hmm, i tried but it is showing error again. what should we do now?",
+        "acha, still failing. is there any other official channel?",
+    ],
+    INT_CLOSE_AND_VERIFY_SELF: [
+        "ok sir, i will visit the branch myself and check. thank you.",
+        "acha, i'll ask my son to check this in the evening. thanks beta.",
+        "wait, i will go to the official website and verify everything now. bye.",
+    ],
+}
 
 # Keep this list focused on self-disclosure / system identity terms to avoid needless rejects.
 FORBIDDEN_TERMS = [
@@ -73,6 +129,20 @@ def _contains_forbidden(reply: str) -> bool:
     return any(term in r for term in FORBIDDEN_TERMS)
 
 
+def _safety_filter(reply: str) -> bool:
+    """
+    Reject outputs that provide procedural guidance for sensitive actions.
+    (Refinement 4: Post-generation safety filter)
+    """
+    blocklist = [
+        "open sms", "sms inbox", "notifications", "copy the otp", "enter otp",
+        "tap confirm", "6-digit code", "share otp", "check the code", "read the code",
+        "tell me the code", "give me the code", "send me the code"
+    ]
+    r = reply.lower()
+    return any(phrase in r for phrase in blocklist)
+
+
 def _get_last_agent_replies(history: list[dict], agent_sender: str = "agent", k: int = 5) -> list[str]:
     """
     Collect the last k agent replies to check for repetition.
@@ -124,26 +194,29 @@ _FALLBACKS = {
 }
 
 
-def _fallback_reply(req) -> str:
-    text = (req.message.text or "").lower()
+def generate_agent_reply(req, session, intent: str = None) -> str:
+    """
+    Generate an agent reply based on the selected intent.
+    Uses a template-first approach with optional LLM rephrasing and safety filtering.
+    """
+    if not intent:
+        intent = INT_ACK_CONCERN
 
-    if OTP_TERMS.search(text):
-        return random.choice(_FALLBACKS["otp"])
+    # 1. Template-First selection
+    templates = INTENT_TEMPLATES.get(intent, INTENT_TEMPLATES[INT_ACK_CONCERN])
+    base_reply = random.choice(templates)
 
-    if "upi" in text:
-        return random.choice(_FALLBACKS["upi"])
+    # If LLM rephrasing is disabled, use template directly with safety check
+    if not getattr(settings, "BF_LLM_REPHRASE", False):
+        session.bf_fallback_used = False
+        if _safety_filter(base_reply):
+            log("safety_filter_triggered", sessionId=session.sessionId, original_reply=base_reply)
+            session.bf_fallback_used = True
+            return random.choice(INTENT_TEMPLATES[INT_ASK_OFFICIAL_HELPLINE])
+        return base_reply
 
-    if "http" in text or "www." in text or "link" in text:
-        return random.choice(_FALLBACKS["link"])
-
-    return random.choice(_FALLBACKS["gen"])
-
-
-# ============================================================
-# Main generator
-# ============================================================
-
-def generate_agent_reply(req, session) -> str:
+    # 2. LLM Rephrase
+    session.bf_fallback_used = False
     system_prompt = _load_prompt("app/llm/prompts/agent_system.txt")
 
     raw_examples = _load_prompt("app/llm/prompts/examples.txt")
@@ -169,6 +242,10 @@ def generate_agent_reply(req, session) -> str:
         "### CONVERSATION HISTORY (most recent last) ###\n"
         + "\n".join(hist_lines)
         + "\n\n"
+        "### DESIRED INTENT ###\n"
+        f"{intent}\n\n"
+        "### BASE TEMPLATE (Rephrase this naturally) ###\n"
+        f"{base_reply}\n\n"
         "### TASK ###\n"
         "- Reply as a polite, elderly Indian person.\n"
         "- Be brief: 1–2 short lines only.\n"
@@ -214,6 +291,11 @@ def generate_agent_reply(req, session) -> str:
                 reject_stats["forbidden"] += 1
                 continue
 
+            # Safety filter (Refinement 4: Post-generation safety filter)
+            if _safety_filter(reply):
+                reject_stats["safety_filter"] += 1
+                continue
+
             # OTP numeric leakage guard: if user asked for otp/pin/password, avoid returning digits
             if OTP_TERMS.search(req.message.text or "") and re.search(r"\b\d{4,8}\b", reply):
                 reject_stats["otp_leak"] += 1
@@ -233,5 +315,12 @@ def generate_agent_reply(req, session) -> str:
             reject_stats["exception"] += 1
             logger.exception("chat_completion error")
 
-    logger.warning("fallback_used reject_stats=%s", dict(reject_stats))
-    return _fallback_reply(req)
+    log("fallback_used", sessionId=session.sessionId, reject_stats=dict(reject_stats))
+    session.bf_fallback_used = True
+    
+    # Final fallback: return a safe template
+    fallback_intent = intent
+    if _safety_filter(base_reply):
+        fallback_intent = INT_ASK_OFFICIAL_HELPLINE
+        
+    return random.choice(INTENT_TEMPLATES.get(fallback_intent, INTENT_TEMPLATES[INT_ASK_OFFICIAL_HELPLINE]))
