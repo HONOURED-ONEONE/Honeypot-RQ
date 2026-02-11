@@ -10,6 +10,16 @@ def _key(session_id: str) -> str:
     return f"{PREFIX}{session_id}"
 
 
+def _json_safe(obj):
+    if isinstance(obj, set):
+        return list(obj)
+    if isinstance(obj, dict):
+        return {k: _json_safe(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_json_safe(v) for v in obj]
+    return obj
+
+
 def load_session(session_id: str) -> SessionState:
     r = get_redis()
     raw = r.get(_key(session_id))
@@ -19,14 +29,20 @@ def load_session(session_id: str) -> SessionState:
         return s
 
     data = json.loads(raw)
+
+    # Rehydrate Intelligence object
     intel = Intelligence(**data.get("extractedIntelligence", {}))
-    s = SessionState(**{**data, "extractedIntelligence": intel})
-    return s
+    data["extractedIntelligence"] = intel
+
+    return SessionState(**data)
 
 
 def save_session(session: SessionState) -> None:
     r = get_redis()
     session.lastUpdatedAtEpoch = int(time.time())
+
     data = session.__dict__.copy()
     data["extractedIntelligence"] = session.extractedIntelligence.__dict__
-    r.set(_key(session.sessionId), json.dumps(data))
+
+    safe_data = _json_safe(data)
+    r.set(_key(session.sessionId), json.dumps(safe_data))
