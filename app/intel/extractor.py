@@ -3,13 +3,13 @@ from urllib.parse import urlparse
 from app.intel.keywords import extract_keywords
 
 # Regexes (defensive extraction of scammer-shared IOCs)
-UPI_RE = re.compile(r"\b[a-zA-Z0-9._-]+@[a-zA-Z0-9.-]+\b")
+UPI_RE = re.compile(r"\b[a-zA-Z0-9._-]{2,64}@[a-zA-Z0-9.-]{2,32}\b")
 URL_RE = re.compile(r"\bhttps?://[^\s]+\b|\bwww\.[^\s]+\b", re.IGNORECASE)
 PHONE_RE = re.compile(r"(?:(?:\+?91)[\s-]?)?[6-9]\d{9}\b")
-TOLL_FREE_RE = re.compile(r"\b1800[\s-]?\d{3}[\s-]?\d{4}\b")
+# Toll-free: support 1800-123-456 and 1800-123-4567 and continuous digits
+TOLL_FREE_RE = re.compile(r"\b1800(?:[\s-]?\d{3}){2}(?:[\s-]?\d{1})?\b|\b1800\d{6,7}\b")
 # Bank account/card numbers: 12-19 digits, allowing spaces/hyphens
-BANK_RE = re.compile(r"\b(?:\d[\s-]?){11,18}\d\b")
-
+BANK_RE = re.compile(r"\b(?:\d[\s-]?){12,19}\b")
 
 def _dedupe_extend(target_list, items):
     existing = set(target_list)
@@ -50,7 +50,11 @@ def update_intelligence_from_text(session, text: str):
     _dedupe_extend(phones, toll_frees)
     
     # Bank accounts: capture 12-19 digits
-    accts = [x.replace(' ', '').replace('-', '') for x in BANK_RE.findall(text)]
+    accts = []
+    for x in BANK_RE.findall(text):
+        digits = x.replace(' ', '').replace('-', '')
+        if 12 <= len(digits) <= 19:
+            accts.append(digits)
     
     kws = extract_keywords(text)
 

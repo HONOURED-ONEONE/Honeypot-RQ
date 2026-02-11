@@ -15,13 +15,13 @@ class Settings:
     SCAM_THRESHOLD: float = float(os.getenv("SCAM_THRESHOLD", "0.75"))
     MAX_CONTEXT_MESSAGES: int = int(os.getenv("MAX_CONTEXT_MESSAGES", "10"))
 
-    FINALIZE_MIN_TURNS: int = int(os.getenv("FINALIZE_MIN_TURNS", "12"))
-    FINALIZE_MIN_IOC_CATEGORIES: int = int(os.getenv("FINALIZE_MIN_IOC_CATEGORIES", "2"))
+    FINALIZE_MIN_TURNS: int = int(os.getenv("FINALIZE_MIN_TURNS", "6"))
+    FINALIZE_MIN_IOC_CATEGORIES: int = int(os.getenv("FINALIZE_MIN_IOC_CATEGORIES", "3"))
     INACTIVITY_TIMEOUT_SEC: int = int(os.getenv("INACTIVITY_TIMEOUT_SEC", "180"))
 
     # Broken-Flow Knobs
     BF_ENABLED: bool = os.getenv("BF_ENABLED", "true").lower() == "true"
-    BF_MAX_TURNS: int = int(os.getenv("BF_MAX_TURNS", "15"))
+    BF_MAX_TURNS: int = int(os.getenv("BF_MAX_TURNS", "10"))
     BF_NO_PROGRESS_TURNS: int = int(os.getenv("BF_NO_PROGRESS_TURNS", "2"))
     BF_REPEAT_LIMIT: int = int(os.getenv("BF_REPEAT_LIMIT", "2"))
     BF_SECONDARY_BOUNCE_LIMIT: int = int(os.getenv("BF_SECONDARY_BOUNCE_LIMIT", "1"))
