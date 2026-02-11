@@ -4,6 +4,7 @@ import re
 from typing import Dict, Any, List, Optional
 from app.core.broken_flow_constants import *
 from app.store.models import SessionState
+from app.core.finalize import should_finalize
 
 def compute_ioc_signature(intel_dict: Dict[str, Any]) -> str:
     """Compute a signature for the current intelligence to detect changes."""
@@ -26,6 +27,9 @@ def choose_next_action(session: SessionState, latest_text: str, intel_dict: Dict
     new_intel_received = False
     if not session.bf_last_ioc_signature:
         session.bf_last_ioc_signature = new_signature
+        # If we have intel on the first turn we see it, count it as a signal to progress
+        if any(intel_dict.get(k) for k in ["bankAccounts", "upiIds", "phishingLinks", "phoneNumbers"]):
+            new_intel_received = True
     elif new_signature != session.bf_last_ioc_signature:
         new_intel_received = True
         session.bf_no_progress_count = 0
@@ -56,12 +60,12 @@ def choose_next_action(session: SessionState, latest_text: str, intel_dict: Dict
             reason = "otp_loop_exit"
 
     elif new_intel_received:
-        # Advance state on new intel
-        if session.bf_state == BF_S1:
+        # Surface-driven progression: link -> phone -> upi -> account
+        if intel_dict.get("phishingLinks") and session.bf_state in (BF_S0, BF_S1):
             session.bf_state = BF_S2
-        elif session.bf_state == BF_S2:
+        elif intel_dict.get("phoneNumbers") and session.bf_state in (BF_S0, BF_S1, BF_S2):
             session.bf_state = BF_S3
-        elif session.bf_state == BF_S3:
+        elif (intel_dict.get("upiIds") or intel_dict.get("bankAccounts")) and session.bf_state in (BF_S0, BF_S1, BF_S2, BF_S3):
             session.bf_state = BF_S4
     
     # Progress-based advancement
@@ -103,6 +107,13 @@ def choose_next_action(session: SessionState, latest_text: str, intel_dict: Dict
         else:
             intent = INT_CLOSE_AND_VERIFY_SELF
             force_finalize = True
+
+    # Fix 3: Gating close intents
+    if intent == INT_CLOSE_AND_VERIFY_SELF:
+        if not should_finalize(session):
+            intent = _pick_missing_intel_intent(intel_dict)
+            force_finalize = False
+            reason = "close_gated_pivot"
 
     # Refinement 1: Intent repetition breaker
     if intent == session.bf_last_intent:

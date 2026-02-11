@@ -57,8 +57,11 @@ def handle_event(req: HoneypotRequest) -> str:
     if session.state in ("INIT", "MONITORING"):
         session.state = "ENGAGED"
 
-    if req.message.sender == "scammer":
-        update_intelligence_from_text(session, req.message.text)
+    # Fix 2: Extraction runs on joined window of recent scammer messages
+    scammer_texts = [m.get("text", "") for m in session.conversation if m.get("sender") == "scammer"]
+    joined_scammer_text = " ".join(scammer_texts[-6:])
+    if joined_scammer_text:
+        update_intelligence_from_text(session, joined_scammer_text)
 
     session.agentNotes = build_agent_notes(detection)
 

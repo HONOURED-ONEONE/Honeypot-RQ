@@ -18,6 +18,13 @@ SUSPICIOUS_KEYWORDS = [
     "pin",
     "password",
     "bank account",
+    "ticket",
+    "reference",
+    "ref",
+    "complaint",
+    "branch",
+    "department",
+    "employee id",
 ]
 
 
