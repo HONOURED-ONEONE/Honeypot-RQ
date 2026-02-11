@@ -2,7 +2,6 @@ import random
 import re
 import logging
 from difflib import SequenceMatcher
-from collections import Counter
 
 from app.settings import settings
 from app.llm.vllm_client import chat_completion
@@ -12,7 +11,10 @@ from app.observability.logging import log
 logger = logging.getLogger("honeypot_agent")
 logger.setLevel(logging.INFO)
 
-# Intent Templates (Template-First Approach)
+# ============================================================
+# Intent Templates (Template-First, Controller-Driven)
+# ============================================================
+
 INTENT_TEMPLATES = {
     INT_ACK_CONCERN: [
         "ok sir, this sounds serious — kindly tell what I should try first.",
@@ -20,19 +22,19 @@ INTENT_TEMPLATES = {
         "hmm sir, I don’t want any mistake; what is the first thing I should verify?"
     ],
     INT_REFUSE_SENSITIVE_ONCE: [
-        "I can’t share OTP or PIN, sorry — kindly tell which official app/website I should verify on.",
+        "I can’t share OTP or PIN, sorry — kindly tell which official app or website I should verify on.",
         "wait sir, it says ‘do not share’ here, so please give the official helpline or portal to confirm.",
-        "hmm I cannot send OTP/PIN, kindly advise the official number or site where I can check myself."
+        "hmm I cannot send OTP or PIN, kindly advise the official number or site where I can check myself."
     ],
     INT_CHANNEL_FAIL: [
-        "the page/link is not opening on my phone, it just keeps loading — which official page should I type?",
+        "the page is not opening on my phone, it just keeps loading — which official page should I type?",
         "hmm my app is stuck on a blank screen, is there another official place I should check?",
-        "wait sir, the site isn’t loading due to network here — what is the exact official section to try?"
+        "wait sir, the site isn’t loading due to network here — what exact official page should I open?"
     ],
     INT_ASK_OFFICIAL_WEBSITE: [
         "sir, what is the exact official website name or page section I should open and check?",
         "acha, can you tell the bank’s official portal address and which page to open there?",
-        "hmm please tell the exact site name and the page (e.g., 'security' or 'alerts') so I’ll type it myself."
+        "hmm please tell the exact site name and the page so I’ll type it myself."
     ],
     INT_ASK_OFFICIAL_HELPLINE: [
         "can you share the official helpline number I should call to confirm this, sir?",
@@ -41,7 +43,7 @@ INTENT_TEMPLATES = {
     ],
     INT_ASK_TICKET_REF: [
         "sir, is there any complaint or reference number I should note down for this request?",
-        "acha, please tell the reference/ticket id shown to you so I can check it with the bank.",
+        "acha, please tell the reference or ticket id shown to you so I can check it with the bank.",
         "hmm, do you have a reference number for this case that I can keep for my records?"
     ],
     INT_ASK_DEPARTMENT_BRANCH: [
@@ -60,120 +62,82 @@ INTENT_TEMPLATES = {
         "acha, still not working here; can you suggest any other official channel or step?"
     ],
     INT_CLOSE_AND_VERIFY_SELF: [
-        "ok sir, I will verify directly on the official website/branch and get back — thank you.",
+        "ok sir, I will verify directly on the official website or branch and get back — thank you.",
         "acha, I’ll ask my son to check this on his phone and confirm from the official portal.",
         "wait, I will contact the official helpline and verify this personally now — thanks for guiding."
     ],
 }
 
-FORBIDDEN_TERMS = ["ai", "law enforcement", "detected", "detection", "honeypot", "fraud classifier"]
-OTP_TERMS = re.compile(r"\b(otp|pin|password)\b", re.I)
-OPENERS_TO_GUARD = {"ok", "wait", "hmm", "accha", "sir", "beta"}
+# ============================================================
+# Safety / Guard Rails
+# ============================================================
+
+FORBIDDEN_TERMS = [
+    "ai", "law enforcement", "detected",
+    "detection", "honeypot", "fraud classifier"
+]
+
+OTP_TERMS = re.compile(r"\b(otp|pin|password|cvv|code)\b", re.I)
 
 def _two_lines_max(text: str) -> str:
     lines = [ln.strip() for ln in (text or "").splitlines() if ln.strip()]
     return "\n".join(lines[:2])
-
-def _similarity(a: str, b: str) -> float:
-    return SequenceMatcher(None, (a or "").lower().strip(), (b or "").lower().strip()).ratio()
 
 def _contains_forbidden(reply: str) -> bool:
     r = (reply or "").lower()
     return any(term in r for term in FORBIDDEN_TERMS)
 
 def _safety_filter(reply: str) -> bool:
+    """
+    Hard stop on any operational or instructional language
+    that could help credential compromise.
+    """
     blocklist = [
-        "open sms", "sms inbox", "notifications", "copy otp",
-        "enter otp", "tap confirm", "6-digit code", "share otp"
+        "open sms",
+        "sms inbox",
+        "notifications",
+        "copy otp",
+        "enter otp",
+        "tap confirm",
+        "6-digit code",
+        "share otp",
     ]
     r = reply.lower()
     return any(p in r for p in blocklist)
 
+# ============================================================
+# Core Responder (Intent-Driven Only)
+# ============================================================
+
 def generate_agent_reply(req, session, intent: str = None) -> str:
     """
-    Broken-flow–aware responder with IOC suppression and auto-closure.
+    Responder is strictly intent-driven.
+    - No state transitions
+    - No IOC inference
+    - No auto-closure
+    Controller owns all flow decisions.
     """
-
-    # ============================================================
-    # Lazy broken-flow state (backward compatible)
-    # ============================================================
-    if not hasattr(session, "bf_satisfied_intents"):
-        session.bf_satisfied_intents = set()
-
-    if not hasattr(session, "bf_ioc_counts"):
-        session.bf_ioc_counts = {
-            "phone": 0,
-            "url": 0,
-            "bank": 0,
-            "reference": 0,
-            "branch": 0,
-        }
-
-    if not hasattr(session, "bf_closed"):
-        session.bf_closed = False
-
-    last_text = (req.message.text or "").lower()
-
-    # ============================================================
-    # IOC extraction from scammer message
-    # ============================================================
-    if re.search(r"\+?\d{10,}", last_text):
-        session.bf_ioc_counts["phone"] += 1
-        session.bf_satisfied_intents.add(INT_ASK_OFFICIAL_HELPLINE)
-
-    if re.search(r"https?://", last_text):
-        session.bf_ioc_counts["url"] += 1
-        session.bf_satisfied_intents.add(INT_ASK_OFFICIAL_WEBSITE)
-
-    if re.search(r"\b\d{12,16}\b", last_text):
-        session.bf_ioc_counts["bank"] += 1
-
-    if re.search(r"\bref[-\s]?\w+", last_text):
-        session.bf_ioc_counts["reference"] += 1
-        session.bf_satisfied_intents.add(INT_ASK_TICKET_REF)
-
-    if "branch" in last_text or "department" in last_text:
-        session.bf_ioc_counts["branch"] += 1
-        session.bf_satisfied_intents.add(INT_ASK_DEPARTMENT_BRANCH)
-
-    # ============================================================
-    # OTP is dead once any alternative channel exists
-    # ============================================================
-    if any(session.bf_ioc_counts[k] > 0 for k in ("phone", "url", "reference", "branch")):
-        session.bf_satisfied_intents.update({
-            INT_REFUSE_SENSITIVE_ONCE,
-            INT_ASK_ALT_VERIFICATION,
-        })
-
-    # ============================================================
-    # Auto-close once 2 distinct IOC categories are collected
-    # ============================================================
-    if sum(1 for v in session.bf_ioc_counts.values() if v > 0) >= 2:
-        session.bf_closed = True
-        return random.choice(INTENT_TEMPLATES[INT_CLOSE_AND_VERIFY_SELF])
-
-    # ============================================================
-    # Intent suppression (no loops)
-    # ============================================================
-    if intent in session.bf_satisfied_intents:
-        intent = INT_ACK_CONCERN
 
     if not intent:
         intent = INT_ACK_CONCERN
 
-    base_reply = random.choice(INTENT_TEMPLATES.get(intent, INTENT_TEMPLATES[INT_ACK_CONCERN]))
+    templates = INTENT_TEMPLATES.get(intent)
+    if not templates:
+        templates = INTENT_TEMPLATES[INT_ACK_CONCERN]
 
-    # ============================================================
-    # Template-only mode
-    # ============================================================
+    base_reply = random.choice(templates)
+
+    # ------------------------------------------------------------
+    # Template-only mode (default, safest)
+    # ------------------------------------------------------------
     if not getattr(settings, "BF_LLM_REPHRASE", False):
         if _safety_filter(base_reply):
             return random.choice(INTENT_TEMPLATES[INT_ASK_OFFICIAL_HELPLINE])
         return base_reply
 
-    # ============================================================
-    # LLM rephrase path (unchanged safety guards)
-    # ============================================================
+    # ------------------------------------------------------------
+    # Optional LLM rephrasing (guarded)
+    # ------------------------------------------------------------
     try:
         out = chat_completion(
             system_prompt="You are a cautious, elderly Indian customer.",
@@ -181,10 +145,18 @@ def generate_agent_reply(req, session, intent: str = None) -> str:
             temperature=0.7,
             max_tokens=80,
         )
+
         reply = _two_lines_max((out or "").strip())
-        if not reply or _contains_forbidden(reply) or _safety_filter(reply):
-            raise ValueError("unsafe")
+
+        if (
+            not reply
+            or _contains_forbidden(reply)
+            or _safety_filter(reply)
+        ):
+            raise ValueError("unsafe rephrase")
+
         return reply
+
     except Exception:
-        session.bf_fallback_used = True
+        log.warning("LLM rephrase failed, falling back to safe template")
         return random.choice(INTENT_TEMPLATES[INT_ASK_OFFICIAL_HELPLINE])
