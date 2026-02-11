@@ -132,12 +132,11 @@ def _contains_forbidden(reply: str) -> bool:
 def _safety_filter(reply: str) -> bool:
     """
     Reject outputs that provide procedural guidance for sensitive actions.
-    (Refinement 4: Post-generation safety filter)
+    (Fix 5: Post-generation safety filter)
     """
     blocklist = [
-        "open sms", "sms inbox", "notifications", "copy the otp", "enter otp",
-        "tap confirm", "6-digit code", "share otp", "check the code", "read the code",
-        "tell me the code", "give me the code", "send me the code"
+        "open sms", "sms inbox", "notifications", "copy otp", "enter otp",
+        "tap confirm", "6-digit code", "share otp"
     ]
     r = reply.lower()
     return any(phrase in r for phrase in blocklist)

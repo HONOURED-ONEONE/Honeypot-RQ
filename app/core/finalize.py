@@ -31,7 +31,7 @@ def should_finalize(session) -> bool:
         return True
 
     # 3. NO PROGRESS THRESHOLD
-    if session.bf_no_progress_count >= settings.BF_NO_PROGRESS_TURNS * 2:
+    if session.bf_no_progress_count >= settings.BF_NO_PROGRESS_TURNS:
         return True
 
     # 4. REPEAT LIMIT REACHED
