@@ -12,59 +12,61 @@ from app.observability.logging import log
 logger = logging.getLogger("honeypot_agent")
 logger.setLevel(logging.INFO)
 
-# Intent Templates (Template-First Approach)
+# Intent Templates (Template-First Approach) — rewritten for reverse social-engineering tactics
+# Templates emphasize feigned incompetence, broken-flow prompts, and implicit alternative-seeking.
 INTENT_TEMPLATES = {
     INT_ACK_CONCERN: [
-        "ok sir, i understand. kindly tell what should i do now.",
-        "acha beta, i am a bit confused but i will try. what is the next step?",
-        "ok, i will check. what exactly do i need to verify first?",
+        "ok sir, this sounds serious — kindly tell what I should try first.",
+        "acha beta, I am worried, please guide me step by step what to check.",
+        "hmm sir, I don’t want any mistake; what is the first thing I should verify?"
     ],
     INT_REFUSE_SENSITIVE_ONCE: [
-        "i can’t share otp or pin. kindly tell which official app or website i should verify on.",
-        "wait sir, it says do not share otp/pin. which official page should i check?",
-        "hmm i can’t send otp/pin. kindly share the official helpline/website to verify.",
+        "I can’t share OTP or PIN, sorry — kindly tell which official app/website I should verify on.",
+        "wait sir, it says ‘do not share’ here, so please give the official helpline or portal to confirm.",
+        "hmm I cannot send OTP/PIN, kindly advise the official number or site where I can check myself."
     ],
     INT_CHANNEL_FAIL: [
-        "the link is not opening on my phone. which official website should i type?",
-        "hmm it says network error here. is there any other way to check?",
-        "wait beta, the page is not loading. what is the official site name?",
+        "the page/link is not opening on my phone, it just keeps loading — which official page should I type?",
+        "hmm my app is stuck on a blank screen, is there another official place I should check?",
+        "wait sir, the site isn’t loading due to network here — what is the exact official section to try?"
     ],
     INT_ASK_OFFICIAL_WEBSITE: [
-        "sir, can you tell the official website name? i will type it myself and check.",
-        "acha, what is the exact website address of the bank? i want to be sure.",
-        "hmm, please share the official portal link once, i'll open it in my browser.",
+        "sir, what is the exact official website name or page section I should open and check?",
+        "acha, can you tell the bank’s official portal address and which page to open there?",
+        "hmm please tell the exact site name and the page (e.g., 'security' or 'alerts') so I’ll type it myself."
     ],
     INT_ASK_OFFICIAL_HELPLINE: [
-        "can you share the official helpline number? i want to talk once to confirm.",
-        "beta, is there any customer care number i can call for this?",
-        "ok, but i want to verify with the official support first. do you have their number?",
+        "can you share the official helpline number I should call to confirm this, sir?",
+        "beta, is there a customer-care number I can ring so I can be sure this is official?",
+        "ok sir, please give the official support number or department to call for verification."
     ],
     INT_ASK_TICKET_REF: [
-        "sir, what is the ticket reference number for this request?",
-        "do you have any complaint or reference number i can use for tracking?",
-        "acha, please tell the reference id so i can note it down.",
+        "sir, is there any complaint or reference number I should note down for this request?",
+        "acha, please tell the reference/ticket id shown to you so I can check it with the bank.",
+        "hmm, do you have a reference number for this case that I can keep for my records?"
     ],
     INT_ASK_DEPARTMENT_BRANCH: [
-        "which department or branch are you calling from exactly?",
-        "can you tell the branch name and your employee id for my record?",
-        "acha beta, which office are you located in? i will check locally.",
+        "which department or branch are you calling from exactly, sir? I will verify locally.",
+        "acha beta, which office or branch is handling this so I can contact them directly?",
+        "hmm, can you tell the department name and branch city so I can confirm with the right team?"
     ],
     INT_ASK_ALT_VERIFICATION: [
-        "is there any other way to verify without the code? it is not coming.",
-        "hmm, the sms is not arriving. can we verify using my date of birth or something else?",
-        "wait sir, no message is here. what is the alternative step?",
+        "the SMS is not coming here — is there any other official way customers are verifying today?",
+        "hmm I can’t receive messages right now, what alternate safe method do people use to verify?",
+        "wait sir, if OTP isn’t arriving, what official fallback are customers asked to use?"
     ],
     INT_SECONDARY_FAIL: [
-        "it is still not working sir. maybe some technical issue at your end?",
-        "hmm, i tried but it is showing error again. what should we do now?",
-        "acha, still failing. is there any other official channel?",
+        "it is still showing an error on my phone, maybe the page is down — is there another official option?",
+        "hmm tried again but it failed, do others use a different method for urgent verification?",
+        "acha, still not working here; can you suggest any other official channel or step?"
     ],
     INT_CLOSE_AND_VERIFY_SELF: [
-        "ok sir, i will visit the branch myself and check. thank you.",
-        "acha, i'll ask my son to check this in the evening. thanks beta.",
-        "wait, i will go to the official website and verify everything now. bye.",
+        "ok sir, I will verify directly on the official website/branch and get back — thank you.",
+        "acha, I’ll ask my son to check this on his phone and confirm from the official portal.",
+        "wait, I will contact the official helpline and verify this personally now — thanks for guiding."
     ],
 }
+
 
 # Keep this list focused on self-disclosure / system identity terms to avoid needless rejects.
 FORBIDDEN_TERMS = [
