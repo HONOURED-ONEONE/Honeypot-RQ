@@ -8,7 +8,6 @@ class Intelligence:
     upiIds: List[str] = field(default_factory=list)
     phishingLinks: List[str] = field(default_factory=list)
     phoneNumbers: List[str] = field(default_factory=list)
-    suspiciousKeywords: List[str] = field(default_factory=list)
 
 
 @dataclass

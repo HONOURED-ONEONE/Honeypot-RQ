@@ -1,69 +1,68 @@
 import hashlib
 import json
-import re
-from typing import Dict, Any
+from typing import Dict, Any, List
 from app.core.broken_flow_constants import *
+from app.core.state_machine import *
 from app.store.models import SessionState
 from app.core.finalize import should_finalize
+from app.intel.artifact_registry import artifact_registry
 
 
 # ============================================================
-# Utilities
+# Registry-Driven Logic
 # ============================================================
+
+# Mapping for registry keys to intents (Single-question-per-turn invariant)
+ARTIFACT_INTENT_MAP = {
+    "phoneNumbers": INT_ASK_OFFICIAL_HELPLINE,
+    "phishingLinks": INT_ASK_OFFICIAL_WEBSITE,
+}
 
 def compute_ioc_signature(intel_dict: Dict[str, Any]) -> str:
     """
     Stable signature of extracted IOCs to detect progress.
+    Derived ONLY from registry keys.
     """
-    data = {
-        "bankAccounts": sorted(intel_dict.get("bankAccounts", [])),
-        "upiIds": sorted(intel_dict.get("upiIds", [])),
-        "phishingLinks": sorted(intel_dict.get("phishingLinks", [])),
-        "phoneNumbers": sorted(intel_dict.get("phoneNumbers", [])),
-    }
+    data = {}
+    for key in artifact_registry.artifacts.keys():
+        if key in intel_dict:
+            data[key] = sorted(intel_dict[key])
     encoded = json.dumps(data, sort_keys=True).encode()
     return hashlib.md5(encoded).hexdigest()
 
 
-def _pick_missing_intel_intent(intel_dict: Dict[str, Any]) -> str:
+def _pick_missing_intel_intent(intel_dict: Dict[str, Any], recent_intents: List[str]) -> str:
     """
-    Implicit alternative-seeking priority.
-    Never explicitly asks for sensitive data.
+    Select next intent based on registry priority, ask_enabled, and cooldown.
+    Deterministic and pure registry math.
     """
-    if not intel_dict.get("phoneNumbers"):
-        return INT_ASK_OFFICIAL_HELPLINE
+    # Sorted by priority (descending)
+    specs = sorted(artifact_registry.artifacts.values(), key=lambda x: x.priority, reverse=True)
+    
+    for spec in specs:
+        if not spec.ask_enabled or spec.passive_only:
+            continue
+        
+        intent = ARTIFACT_INTENT_MAP.get(spec.key)
+        if not intent:
+            continue
+            
+        # Check missing status based on registry keys
+        if not intel_dict.get(spec.key):
+            # Cooldown to prevent repetitive loops
+            if intent in recent_intents[-3:]:
+                continue
+            return intent
+            
+    return INT_ACK_CONCERN
 
-    if not intel_dict.get("phishingLinks"):
-        return INT_ASK_OFFICIAL_WEBSITE
 
-    kws = intel_dict.get("suspiciousKeywords", [])
-    has_ticket = any(k in kws for k in ["ticket", "reference", "complaint"])
-    has_branch = any(k in kws for k in ["branch", "department", "employee id"])
-
-    if not has_ticket:
-        return INT_ASK_TICKET_REF
-
-    if not has_branch:
-        return INT_ASK_DEPARTMENT_BRANCH
-
-    return INT_ASK_TICKET_REF
-
-
-def _pivot_intent(current_intent: str) -> str:
+def _pivot_intent(intel_dict: Dict[str, Any], recent_intents: List[str], avoid_intent: str) -> str:
     """
-    Forced pivot chain to break repetition loops.
+    Forced pivot using registry priority and cooldown.
     """
-    pivots = {
-        INT_ACK_CONCERN: INT_ASK_OFFICIAL_HELPLINE,
-        INT_ASK_OFFICIAL_HELPLINE: INT_ASK_TICKET_REF,
-        INT_ASK_OFFICIAL_WEBSITE: INT_ASK_DEPARTMENT_BRANCH,
-        INT_ASK_TICKET_REF: INT_ASK_DEPARTMENT_BRANCH,
-        INT_ASK_DEPARTMENT_BRANCH: INT_CLOSE_AND_VERIFY_SELF,
-        INT_REFUSE_SENSITIVE_ONCE: INT_ASK_TICKET_REF,
-        INT_ASK_ALT_VERIFICATION: INT_ASK_DEPARTMENT_BRANCH,
-        INT_SECONDARY_FAIL: INT_CLOSE_AND_VERIFY_SELF,
-    }
-    return pivots.get(current_intent, INT_CLOSE_AND_VERIFY_SELF)
+    # Exclude the current repetitive intent by adding it to recent_intents for this call
+    return _pick_missing_intel_intent(intel_dict, recent_intents + [avoid_intent])
 
 
 # ============================================================
@@ -80,12 +79,10 @@ def choose_next_action(
     """
     Deterministic broken-flow controller.
     - Controller owns ALL state transitions
-    - Responder is intent-only
+    - Registry-driven intelligence pursuit
     """
 
-    # --------------------------------------------------------
-    # Session defaults (backward compatible)
-    # --------------------------------------------------------
+    # 1. Session defaults (backward compatible)
     session.bf_state = getattr(session, "bf_state", BF_S0)
     session.bf_last_intent = getattr(session, "bf_last_intent", None)
     session.bf_repeat_count = getattr(session, "bf_repeat_count", 0)
@@ -95,15 +92,13 @@ def choose_next_action(
     session.bf_recent_intents = getattr(session, "bf_recent_intents", [])
     session.bf_last_ioc_signature = getattr(session, "bf_last_ioc_signature", None)
 
-    # --------------------------------------------------------
-    # Progress detection (IOC-based)
-    # --------------------------------------------------------
+    # 2. Progress detection (IOC-based, Registry-only)
     new_signature = compute_ioc_signature(intel_dict)
     new_intel_received = False
 
     if session.bf_last_ioc_signature is None:
         session.bf_last_ioc_signature = new_signature
-        if any(intel_dict.get(k) for k in ["bankAccounts", "upiIds", "phishingLinks", "phoneNumbers"]):
+        if any(intel_dict.get(k) for k in artifact_registry.artifacts.keys()):
             new_intel_received = True
     elif new_signature != session.bf_last_ioc_signature:
         new_intel_received = True
@@ -112,94 +107,66 @@ def choose_next_action(
     else:
         session.bf_no_progress_count += 1
 
-    # --------------------------------------------------------
-    # Sensitive request detection
-    # --------------------------------------------------------
-    sensitive_pattern = re.compile(r"\b(otp|pin|password|cvv|code)\b", re.I)
-    asked_sensitive = bool(sensitive_pattern.search(latest_text))
-
     intent = None
     force_finalize = False
     reason = "normal_flow"
 
-    # --------------------------------------------------------
-    # Explicit policy refusal path (only once)
-    # --------------------------------------------------------
-    if asked_sensitive and not session.bf_policy_refused_once:
-        session.bf_policy_refused_once = True
-        session.bf_state = BF_S3
-        intent = INT_REFUSE_SENSITIVE_ONCE
-        reason = "policy_refusal"
-
-    # --------------------------------------------------------
-    # State progression driven by intelligence surfaces
-    # --------------------------------------------------------
-    if not intent and new_intel_received:
-        if intel_dict.get("phishingLinks") and session.bf_state in (BF_S0, BF_S1):
-            session.bf_state = BF_S2
-        elif intel_dict.get("phoneNumbers") and session.bf_state in (BF_S0, BF_S1, BF_S2):
-            session.bf_state = BF_S3
-        elif (intel_dict.get("upiIds") or intel_dict.get("bankAccounts")):
-            session.bf_state = BF_S4
-
-    # --------------------------------------------------------
-    # Progress-based advancement (broken loops)
-    # --------------------------------------------------------
-    if not intent:
-        if session.bf_state == BF_S1:
-            session.bf_state = BF_S2
-        elif session.bf_state == BF_S2 and session.bf_no_progress_count >= settings.BF_NO_PROGRESS_TURNS:
-            session.bf_state = BF_S3
-        elif session.bf_state == BF_S3 and session.bf_no_progress_count >= settings.BF_NO_PROGRESS_TURNS:
-            if session.bf_secondary_bounce_count < settings.BF_SECONDARY_BOUNCE_LIMIT:
+    # 3. State progression driven by intelligence surfaces
+    if new_intel_received:
+        if intel_dict.get("upiIds") or intel_dict.get("bankAccounts"):
+            if session.bf_state in (BF_S0, BF_S1, BF_S2, BF_S3):
                 session.bf_state = BF_S4
-                session.bf_secondary_bounce_count += 1
-            else:
-                session.bf_state = BF_S5
-        elif session.bf_state == BF_S4 and session.bf_no_progress_count >= settings.BF_NO_PROGRESS_TURNS:
-            session.bf_state = BF_S5
+        elif intel_dict.get("phoneNumbers"):
+            if session.bf_state in (BF_S0, BF_S1, BF_S2):
+                session.bf_state = BF_S3
+        elif intel_dict.get("phishingLinks"):
+            if session.bf_state in (BF_S0, BF_S1):
+                session.bf_state = BF_S2
 
-    # --------------------------------------------------------
-    # Intent selection (FINAL state only)
-    # --------------------------------------------------------
-    if not intent:
-        if session.bf_state == BF_S0:
-            session.bf_state = BF_S1
-            intent = INT_ACK_CONCERN
-        elif session.bf_state == BF_S1:
-            intent = INT_ACK_CONCERN
-        elif session.bf_state == BF_S2:
-            intent = _pick_missing_intel_intent(intel_dict)
-        elif session.bf_state == BF_S3:
-            intent = INT_ASK_ALT_VERIFICATION
-        elif session.bf_state == BF_S4:
-            intent = _pick_missing_intel_intent(intel_dict)
-        elif session.bf_state == BF_S5:
-            intent = INT_CLOSE_AND_VERIFY_SELF
-            force_finalize = True
+    # 4. Progress-based advancement (broken loops)
+    if session.bf_state == BF_S1:
+        session.bf_state = BF_S2
+    elif session.bf_state == BF_S2 and session.bf_no_progress_count >= settings.BF_NO_PROGRESS_TURNS:
+        session.bf_state = BF_S3
+    elif session.bf_state == BF_S3 and session.bf_no_progress_count >= settings.BF_NO_PROGRESS_TURNS:
+        if session.bf_secondary_bounce_count < settings.BF_SECONDARY_BOUNCE_LIMIT:
+            session.bf_state = BF_S4
+            session.bf_secondary_bounce_count += 1
         else:
-            intent = INT_CLOSE_AND_VERIFY_SELF
-            force_finalize = True
+            session.bf_state = BF_S5
+    elif session.bf_state == BF_S4 and session.bf_no_progress_count >= settings.BF_NO_PROGRESS_TURNS:
+        session.bf_state = BF_S5
 
-    # --------------------------------------------------------
-    # Close gating (never close without sufficient intel)
-    # --------------------------------------------------------
+    # 5. Intent selection (Registry-driven)
+    if session.bf_state == BF_S0:
+        session.bf_state = BF_S1
+        intent = INT_ACK_CONCERN
+    elif session.bf_state == BF_S1:
+        intent = INT_ACK_CONCERN
+    elif session.bf_state in (BF_S2, BF_S3, BF_S4):
+        intent = _pick_missing_intel_intent(intel_dict, session.bf_recent_intents)
+    elif session.bf_state == BF_S5:
+        intent = INT_CLOSE_AND_VERIFY_SELF
+        force_finalize = True
+    else:
+        intent = INT_CLOSE_AND_VERIFY_SELF
+        force_finalize = True
+
+    # 6. Close gating
     if intent == INT_CLOSE_AND_VERIFY_SELF:
-        if not should_finalize(session):
-            intent = _pick_missing_intel_intent(intel_dict)
+        if should_finalize(session) is None:
+            intent = _pick_missing_intel_intent(intel_dict, session.bf_recent_intents)
             force_finalize = False
             reason = "close_gated_pivot"
 
-    # --------------------------------------------------------
-    # Repetition breaker
-    # --------------------------------------------------------
+    # 7. Repetition breaker (Pivot using registry math)
     if intent == session.bf_last_intent:
         session.bf_repeat_count += 1
     else:
         session.bf_repeat_count = 0
 
     if session.bf_repeat_count >= settings.BF_REPEAT_LIMIT:
-        intent = _pivot_intent(intent)
+        intent = _pivot_intent(intel_dict, session.bf_recent_intents, intent)
         session.bf_repeat_count = 0
         reason = "repetition_pivot"
 

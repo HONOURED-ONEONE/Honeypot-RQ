@@ -1,19 +1,94 @@
-# Broken-Flow States
-BF_S0 = "BF_S0" # Init / Detecting
-BF_S1 = "BF_S1" # Engagement Started
-BF_S2 = "BF_S2" # Deep Engagement / Intel Extraction
-BF_S3 = "BF_S3" # Alternative Path (after slight resistance or repeat)
-BF_S4 = "BF_S4" # Secondary Failure
-BF_S5 = "BF_S5" # Closing / Finalize
+from app.core.state_machine import (
+    BF_S0, BF_S1, BF_S2, BF_S3, BF_S4, BF_S5
+)
 
 # Intents
+
+# Interaction Surface: State Acknowledgment
+# Expected Artifact Yield: None
+# Repeatability: Repeatable
+# Relation: Precursor to INT_CHANNEL_FAIL or INT_ASK_* sequences
 INT_ACK_CONCERN = "INT_ACK_CONCERN"
+
+# Interaction Surface: Boundary Assertion
+# Expected Artifact Yield: None
+# Repeatability: Single-Use
+# Relation: Unlocks INT_CHANNEL_FAIL; Suppresses sensitive data ingress
 INT_REFUSE_SENSITIVE_ONCE = "INT_REFUSE_SENSITIVE_ONCE"
+
+# Interaction Surface: Channel Inhibition / Controlled Failure
+# Expected Artifact Yield: upiIds, bankAccounts
+# Repeatability: Repeatable
+# Relation: May trigger INT_ASK_ALT_VERIFICATION
 INT_CHANNEL_FAIL = "INT_CHANNEL_FAIL"
+
+# Interaction Surface: Domain Verification
+# Expected Artifact Yield: phishingLinks
+# Repeatability: Repeatable
+# Relation: Unlocks domain analysis subsystems
 INT_ASK_OFFICIAL_WEBSITE = "INT_ASK_OFFICIAL_WEBSITE"
+
+# Interaction Surface: Authority Verification
+# Expected Artifact Yield: phoneNumbers
+# Repeatability: Repeatable
+# Relation: Cross-references carrier registry
 INT_ASK_OFFICIAL_HELPLINE = "INT_ASK_OFFICIAL_HELPLINE"
+
+# Interaction Surface: Process Verification
+# Expected Artifact Yield: identifiers (reference codes)
+# Repeatability: Single-Use per session segment
+# Relation: Validates process coherence
 INT_ASK_TICKET_REF = "INT_ASK_TICKET_REF"
+
+# Interaction Surface: Entity Verification
+# Expected Artifact Yield: organizations
+# Repeatability: Single-Use
+# Relation: Maps to organizational hierarchy
 INT_ASK_DEPARTMENT_BRANCH = "INT_ASK_DEPARTMENT_BRANCH"
+
+# Interaction Surface: Alternative Channel Negotiation
+# Expected Artifact Yield: phoneNumbers, upiIds
+# Repeatability: Repeatable
+# Relation: Fallback for INT_CHANNEL_FAIL
 INT_ASK_ALT_VERIFICATION = "INT_ASK_ALT_VERIFICATION"
+
+# Interaction Surface: Persistent Failure State
+# Expected Artifact Yield: bankAccounts
+# Repeatability: Repeatable
+# Relation: Escalation of INT_CHANNEL_FAIL
 INT_SECONDARY_FAIL = "INT_SECONDARY_FAIL"
+
+# Interaction Surface: Session Finalization
+# Expected Artifact Yield: None
+# Repeatability: Single-Use
+# Relation: Terminates active session context
 INT_CLOSE_AND_VERIFY_SELF = "INT_CLOSE_AND_VERIFY_SELF"
+
+
+# Intent Groupings
+
+# Intents capable of extracting primary registry artifacts
+HIGH_YIELD_ARTIFACT_INTENTS = {
+    INT_CHANNEL_FAIL,
+    INT_ASK_OFFICIAL_WEBSITE,
+    INT_ASK_OFFICIAL_HELPLINE,
+    INT_ASK_ALT_VERIFICATION,
+    INT_SECONDARY_FAIL
+}
+
+# Intents enforcing security boundaries without data yield
+SINGLE_USE_BOUNDARY_INTENTS = {
+    INT_REFUSE_SENSITIVE_ONCE,
+    INT_CLOSE_AND_VERIFY_SELF
+}
+
+# Intents representing non-functional transactional states
+SECONDARY_FAILURE_INTENTS = {
+    INT_SECONDARY_FAIL,
+    INT_CHANNEL_FAIL
+}
+
+# Intents marking session termination
+CLOSING_INTENTS = {
+    INT_CLOSE_AND_VERIFY_SELF
+}

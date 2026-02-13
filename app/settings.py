@@ -27,6 +27,10 @@ class Settings:
     BF_SECONDARY_BOUNCE_LIMIT: int = int(os.getenv("BF_SECONDARY_BOUNCE_LIMIT", "1"))
     BF_LLM_REPHRASE: bool = os.getenv("BF_LLM_REPHRASE", "false").lower() == "true"
 
+    # Registry Overrides
+    REGISTRY_TTL: int = int(os.getenv("REGISTRY_TTL", "60"))
+    REGISTRY_OVERRIDES_KEY: str = os.getenv("REGISTRY_OVERRIDES_KEY", "registry:overrides")
+
     GUVI_CALLBACK_URL: str = os.getenv("GUVI_CALLBACK_URL", "")
     CALLBACK_TIMEOUT_SEC: int = int(os.getenv("CALLBACK_TIMEOUT_SEC", "5"))
 

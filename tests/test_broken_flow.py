@@ -28,27 +28,29 @@ def session():
 def settings():
     return MockSettings()
 
-def test_otp_refusal_once_and_exit(session, settings):
+def test_registry_driven_intent_selection(session, settings):
     intel_dict = asdict(session.extractedIntelligence)
-    action = choose_next_action(session, "send me the otp", intel_dict, {}, settings)
-    assert action["intent"] == INT_REFUSE_SENSITIVE_ONCE
-    assert session.bf_policy_refused_once is True
-    assert session.bf_state == BF_S3
+    session.bf_state = BF_S2
     
-    action = choose_next_action(session, "i need the otp now", intel_dict, {}, settings)
-    assert action["intent"] != INT_REFUSE_SENSITIVE_ONCE
-    assert session.bf_state == BF_S4
-    assert action["reason"] == "otp_loop_exit"
+    # Priority: Link (20) > Phone (10)
+    action = choose_next_action(session, "hello", intel_dict, {}, settings)
+    assert action["intent"] == INT_ASK_OFFICIAL_WEBSITE
+    
+    # Now add Link, should pick Phone
+    intel_dict["phishingLinks"] = ["http://scam.com"]
+    action = choose_next_action(session, "hello", intel_dict, {}, settings)
+    assert action["intent"] == INT_ASK_OFFICIAL_HELPLINE
 
 def test_deterministic_progression_on_intel(session, settings):
     intel_dict = asdict(session.extractedIntelligence)
     session.bf_state = BF_S1
     
+    # Adding phone numbers advances state to BF_S3
     intel_dict["phoneNumbers"] = ["9999999999"]
     action = choose_next_action(session, "my phone is 9999999999", intel_dict, {}, settings)
-    assert session.bf_state == BF_S2
+    assert session.bf_state == BF_S3
     
-    # We need to re-add S2->S3 transition in the controller for this to pass
+    # Adding phishing link advances to S2 (if S0/S1) but we are in S3, so it stays in S3
     intel_dict["phishingLinks"] = ["http://scam.link"]
     action = choose_next_action(session, "visit http://scam.link", intel_dict, {}, settings)
     assert session.bf_state == BF_S3
@@ -56,16 +58,15 @@ def test_deterministic_progression_on_intel(session, settings):
 def test_intent_repetition_pivot(session, settings):
     intel_dict = asdict(session.extractedIntelligence)
     session.bf_state = BF_S2
-    session.bf_last_intent = INT_ASK_OFFICIAL_HELPLINE
-    session.bf_repeat_count = 0 
+    # Website is highest priority
+    session.bf_last_intent = INT_ASK_OFFICIAL_WEBSITE
+    session.bf_repeat_count = 1 
     
     action = choose_next_action(session, "hello", intel_dict, {}, settings)
-    assert action["intent"] == INT_ASK_OFFICIAL_HELPLINE
-    assert session.bf_repeat_count == 1
-    
-    action = choose_next_action(session, "hello again", intel_dict, {}, settings)
+    # Trigger repetition pivot
     assert action["reason"] == "repetition_pivot"
-    assert session.bf_repeat_count == 0
+    # Pivot should pick the next best missing intel (Phone)
+    assert action["intent"] == INT_ASK_OFFICIAL_HELPLINE
 
 def test_safety_filter_updated(session):
     assert _safety_filter("please open sms") is True
@@ -78,26 +79,65 @@ def test_finalize_triggers(session, settings):
     session.scamDetected = True
     session.extractedIntelligence.phoneNumbers = ["1234567890"]
     session.extractedIntelligence.phishingLinks = ["http://scam.com"]
-    assert should_finalize(session) is True
+    # settings.py default is 3 categories
+    session.extractedIntelligence.upiIds = ["scam@upi"]
+    assert should_finalize(session) is not None
     
     session.extractedIntelligence = Intelligence()
     session.bf_no_progress_count = settings.BF_NO_PROGRESS_TURNS
-    assert should_finalize(session) is True
+    assert should_finalize(session) == "no_progress_threshold"
 
 def test_pick_missing_intel_logic():
     # Test the pure function directly
     intel = {
         "phoneNumbers": [],
         "phishingLinks": [],
-        "suspiciousKeywords": []
     }
-    assert _pick_missing_intel_intent(intel) == INT_ASK_OFFICIAL_HELPLINE
-    
-    intel["phoneNumbers"] = ["123"]
-    assert _pick_missing_intel_intent(intel) == INT_ASK_OFFICIAL_WEBSITE
+    # Link (20) > Phone (10)
+    assert _pick_missing_intel_intent(intel, []) == INT_ASK_OFFICIAL_WEBSITE
     
     intel["phishingLinks"] = ["http"]
-    assert _pick_missing_intel_intent(intel) == INT_ASK_TICKET_REF
+    assert _pick_missing_intel_intent(intel, []) == INT_ASK_OFFICIAL_HELPLINE
     
-    intel["suspiciousKeywords"] = ["ticket"]
-    assert _pick_missing_intel_intent(intel) == INT_ASK_DEPARTMENT_BRANCH
+    intel["phoneNumbers"] = ["123"]
+    # All asked artifacts collected -> ACK_CONCERN
+    assert _pick_missing_intel_intent(intel, []) == INT_ACK_CONCERN
+
+def test_guardrail_controller_never_asks_passive_only(session, settings):
+    from app.intel.artifact_registry import artifact_registry
+    intel_dict = asdict(session.extractedIntelligence)
+    session.bf_state = BF_S2
+    
+    # Normally picks Website (prio 20)
+    # Let's set phishingLinks to passive_only
+    artifact_registry.artifacts["phishingLinks"].passive_only = True
+    try:
+        action = choose_next_action(session, "hello", intel_dict, {}, settings)
+        # Should NOT pick Website now, should pick Phone (prio 10)
+        assert action["intent"] == INT_ASK_OFFICIAL_HELPLINE
+    finally:
+        # Reset
+        artifact_registry.artifacts["phishingLinks"].passive_only = False
+
+def test_guardrail_finalization_ignores_non_registry_data(session, settings):
+    session.scamDetected = True
+    # Add data to Intelligence that IS in the registry
+    session.extractedIntelligence.phoneNumbers = ["1234567890"]
+    
+    # Add something that is NOT in the registry (if we can)
+    # Since we can't easily add fields to the dataclass, we can mock _ioc_category_count
+    # or just trust that it only iterates over registry.
+    # A better test: ensure it doesn't finalize with just 1 registered category
+    # even if other random fields are set.
+    setattr(session.extractedIntelligence, "fake_intel", ["some_data"])
+    
+    # Should NOT finalize because FINALIZE_MIN_IOC_CATEGORIES is 3 by default
+    assert should_finalize(session) is None
+    
+    # Add 2nd registered category
+    session.extractedIntelligence.phishingLinks = ["http://scam.com"]
+    assert should_finalize(session) is None
+    
+    # Add 3rd registered category
+    session.extractedIntelligence.upiIds = ["scam@upi"]
+    assert should_finalize(session) == "ioc_milestone"

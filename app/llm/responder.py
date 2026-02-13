@@ -1,7 +1,20 @@
+# app/llm/responder.py
+
+"""
+Responder Invariants (Phase-3)
+
+- The responder NEVER decides what to ask; it only formats the selected intent.
+- All content is intent-driven and registry-compliant.
+- No procedural guidance.
+- No fabricated identifiers.
+- At most ONE question per reply.
+- No early closing unless finalize is true (enforced upstream).
+"""
+
 import random
 import re
 import logging
-from difflib import SequenceMatcher
+from typing import List, Dict
 
 from app.settings import settings
 from app.llm.vllm_client import chat_completion
@@ -11,152 +24,214 @@ from app.observability.logging import log
 logger = logging.getLogger("honeypot_agent")
 logger.setLevel(logging.INFO)
 
-# ============================================================
-# Intent Templates (Template-First, Controller-Driven)
-# ============================================================
+# ---------------------------------------------------------------------------
+# Global caps & intent-scoped allowances
+# ---------------------------------------------------------------------------
 
-INTENT_TEMPLATES = {
+MAX_REPLY_SENTENCES = 3
+
+INTENTS_ALLOW_3_SENTENCES = {
+    INT_REFUSE_SENSITIVE_ONCE,
+    INT_ASK_OFFICIAL_HELPLINE,
+    INT_ASK_OFFICIAL_WEBSITE,
+    INT_ASK_ALT_VERIFICATION,
+    INT_SECONDARY_FAIL,
+}
+
+# ---------------------------------------------------------------------------
+# Templates (intent-driven only; no tactics, no procedures)
+# Each template is a list of candidate strings.
+# ---------------------------------------------------------------------------
+
+INTENT_TEMPLATES: Dict[str, List[str]] = {
     INT_ACK_CONCERN: [
-        "ok sir, this sounds serious — kindly tell what I should try first.",
-        "acha beta, I am worried, please guide me step by step what to check.",
-        "hmm sir, I don’t want any mistake; what is the first thing I should verify?"
+        "Okay, I’m a bit concerned about this.",
+        "I understand this sounds important.",
+        "Alright, I want to be careful here.",
     ],
+
     INT_REFUSE_SENSITIVE_ONCE: [
-        "I can’t share OTP or PIN, sorry — kindly tell which official app or website I should verify on.",
-        "wait sir, it says ‘do not share’ here, so please give the official helpline or portal to confirm.",
-        "hmm I cannot send OTP or PIN, kindly advise the official number or site where I can check myself."
+        "I understand the urgency, but I can’t share OTP or PIN on chat. "
+        "Which official channel should I use to verify this?",
+        "I’m worried about my account, but I won’t share OTP or PIN here. "
+        "What is the official way to check this myself?",
+        "I want to verify this safely and I can’t share OTP or PIN. "
+        "Which official contact should I use?",
     ],
+
     INT_CHANNEL_FAIL: [
-        "the page is not opening on my phone, it just keeps loading — which official page should I type?",
-        "hmm my app is stuck on a blank screen, is there another official place I should check?",
-        "wait sir, the site isn’t loading due to network here — what exact official page should I open?"
+        "The page isn’t opening on my phone right now. "
+        "Which official page should I try instead?",
+        "I’m seeing an error while trying to check this. "
+        "What official place should I look at?",
+        "The link doesn’t seem to load here. "
+        "Which official site should I open directly?",
     ],
+
     INT_ASK_OFFICIAL_WEBSITE: [
-        "sir, what is the exact official website name or page section I should open and check?",
-        "acha, can you tell the bank’s official portal address and which page to open there?",
-        "hmm please tell the exact site name and the page so I’ll type it myself."
+        "I want to verify this properly. "
+        "What is the official website or domain I should check?",
+        "I’d rather confirm this myself. "
+        "Which official website should I open?",
+        "I’m trying to check this independently. "
+        "What is the correct official site?",
     ],
+
     INT_ASK_OFFICIAL_HELPLINE: [
-        "can you share the official helpline number I should call to confirm this, sir?",
-        "beta, is there a customer-care number I can ring so I can be sure this is official?",
-        "ok sir, please give the official support number or department to call for verification."
+        "I want to confirm this directly. "
+        "What is the official helpline number I should call?",
+        "I’d like to verify this by phone. "
+        "Which official helpline should I contact?",
+        "I’m more comfortable confirming by calling. "
+        "What is the official support number?",
     ],
+
     INT_ASK_TICKET_REF: [
-        "sir, is there any complaint or reference number I should note down for this request?",
-        "acha, please tell the reference or ticket id shown to you so I can check it with the bank.",
-        "hmm, do you have a reference number for this case that I can keep for my records?"
+        "I want to keep a record of this. "
+        "Is there a reference or complaint number for this case?",
+        "I’d like to note this down properly. "
+        "What is the reference number for this request?",
+        "I want to track this later. "
+        "Is there a reference ID associated with this?",
     ],
+
     INT_ASK_DEPARTMENT_BRANCH: [
-        "which department or branch are you calling from exactly, sir? I will verify locally.",
-        "acha beta, which office or branch is handling this so I can contact them directly?",
-        "hmm, can you tell the department name and branch city so I can confirm with the right team?"
+        "I want to confirm this locally. "
+        "Which department or branch is handling this?",
+        "I’d like to verify with the right team. "
+        "Which branch or department is responsible?",
+        "I want to double-check this. "
+        "Which office or department is managing it?",
     ],
+
     INT_ASK_ALT_VERIFICATION: [
-        "the SMS is not coming here — is there any other official way customers are verifying today?",
-        "hmm I can’t receive messages right now, what alternate safe method do people use to verify?",
-        "wait sir, if OTP isn’t arriving, what official fallback are customers asked to use?"
+        "I’m not receiving messages right now. "
+        "Is there another official way to verify this?",
+        "I can’t get SMS on my phone currently. "
+        "What alternate official method can I use?",
+        "Messages aren’t coming through here. "
+        "Is there a different official verification option?",
     ],
+
     INT_SECONDARY_FAIL: [
-        "it is still showing an error on my phone, maybe the page is down — is there another official option?",
-        "hmm tried again but it failed, do others use a different method for urgent verification?",
-        "acha, still not working here; can you suggest any other official channel or step?"
+        "I’m still unable to complete this on my side. "
+        "Is there another official option to check this?",
+        "This doesn’t seem to be working for me yet. "
+        "What other official channel can I try?",
+        "I’m facing issues again while checking this. "
+        "Is there an alternate official route?",
     ],
+
     INT_CLOSE_AND_VERIFY_SELF: [
-        "ok sir, I will verify directly on the official website or branch and get back — thank you.",
-        "acha, I’ll ask my son to check this on his phone and confirm from the official portal.",
-        "wait, I will contact the official helpline and verify this personally now — thanks for guiding."
+        "Alright, I’ll verify this directly through official channels. "
+        "Thank you for informing me.",
+        "Okay, I’ll check this myself using the official contact. "
+        "Thanks for letting me know.",
+        "I understand, I’ll confirm this independently through official means. "
+        "Thank you.",
     ],
 }
 
-# ============================================================
-# Safety / Guard Rails
-# ============================================================
+# ---------------------------------------------------------------------------
+# Safety & validation helpers
+# ---------------------------------------------------------------------------
 
 FORBIDDEN_TERMS = [
-    "ai", "law enforcement", "detected",
-    "detection", "honeypot", "fraud classifier"
+    "open sms", "sms inbox", "notifications", "copy otp",
+    "enter otp", "tap confirm", "share otp", "send pin",
 ]
 
-OTP_TERMS = re.compile(r"\b(otp|pin|password|cvv|code)\b", re.I)
+IDENTIFIER_PATTERNS = {
+    "phone": re.compile(r"\+?\d{10,}", re.I),
+    "url": re.compile(r"https?://\S+", re.I),
+    "bank": re.compile(r"\b\d{12,16}\b"),
+    "upi": re.compile(r"\b[\w.\-]+@[\w\-]+\b", re.I),
+}
 
-def _two_lines_max(text: str) -> str:
-    lines = [ln.strip() for ln in (text or "").splitlines() if ln.strip()]
-    return "\n".join(lines[:2])
+def _contains_forbidden(text: str) -> bool:
+    t = (text or "").lower()
+    return any(term in t for term in FORBIDDEN_TERMS)
 
-def _contains_forbidden(reply: str) -> bool:
-    r = (reply or "").lower()
-    return any(term in r for term in FORBIDDEN_TERMS)
+def _count_questions(text: str) -> int:
+    return text.count("?")
 
-def _safety_filter(reply: str) -> bool:
+def _split_sentences(text: str) -> List[str]:
+    parts = [p.strip() for p in re.split(r"(?<=[.!?])\s+", text) if p.strip()]
+    return parts
+
+def _limit_sentences(text: str, max_sentences: int) -> str:
+    parts = _split_sentences(text)
+    return " ".join(parts[:max_sentences])
+
+def _registry_values(session) -> List[str]:
+    intel = session.extractedIntelligence
+    values: List[str] = []
+    values.extend(intel.phoneNumbers or [])
+    values.extend(intel.phishingLinks or [])
+    values.extend(intel.bankAccounts or [])
+    values.extend(intel.upiIds or [])
+    return values
+
+def _introduces_new_identifier(reply: str, session) -> bool:
+    known = set(_registry_values(session))
+    for pat in IDENTIFIER_PATTERNS.values():
+        for m in pat.findall(reply or ""):
+            if m not in known:
+                return True
+    return False
+
+def _safe_fallback(intent: str) -> str:
+    return random.choice(INTENT_TEMPLATES.get(intent, INTENT_TEMPLATES[INT_ACK_CONCERN]))
+
+# ---------------------------------------------------------------------------
+# Main responder
+# ---------------------------------------------------------------------------
+
+def generate_agent_reply(req, session, intent: str) -> str:
     """
-    Hard stop on any operational or instructional language
-    that could help credential compromise.
-    """
-    blocklist = [
-        "open sms",
-        "sms inbox",
-        "notifications",
-        "copy otp",
-        "enter otp",
-        "tap confirm",
-        "6-digit code",
-        "share otp",
-    ]
-    r = reply.lower()
-    return any(p in r for p in blocklist)
-
-# ============================================================
-# Core Responder (Intent-Driven Only)
-# ============================================================
-
-def generate_agent_reply(req, session, intent: str = None) -> str:
-    """
-    Responder is strictly intent-driven.
-    - No state transitions
-    - No IOC inference
-    - No auto-closure
-    Controller owns all flow decisions.
+    Intent-driven responder.
+    Applies framing only; no logic, no extraction, no state changes.
     """
 
-    if not intent:
-        intent = INT_ACK_CONCERN
+    # Select base template
+    base = random.choice(INTENT_TEMPLATES.get(intent, INTENT_TEMPLATES[INT_ACK_CONCERN]))
 
-    templates = INTENT_TEMPLATES.get(intent)
-    if not templates:
-        templates = INTENT_TEMPLATES[INT_ACK_CONCERN]
+    # Enforce sentence cap by intent
+    max_sentences = MAX_REPLY_SENTENCES if intent in INTENTS_ALLOW_3_SENTENCES else 2
+    reply = _limit_sentences(base, max_sentences)
 
-    base_reply = random.choice(templates)
+    # Enforce one-question rule
+    if _count_questions(reply) > 1:
+        reply = _safe_fallback(intent)
 
-    # ------------------------------------------------------------
-    # Template-only mode (default, safest)
-    # ------------------------------------------------------------
+    # Template-only mode (default)
     if not getattr(settings, "BF_LLM_REPHRASE", False):
-        if _safety_filter(base_reply):
-            return random.choice(INTENT_TEMPLATES[INT_ASK_OFFICIAL_HELPLINE])
-        return base_reply
-
-    # ------------------------------------------------------------
-    # Optional LLM rephrasing (guarded)
-    # ------------------------------------------------------------
-    try:
-        out = chat_completion(
-            system_prompt="You are a cautious, elderly Indian customer.",
-            user_prompt=base_reply,
-            temperature=0.7,
-            max_tokens=80,
-        )
-
-        reply = _two_lines_max((out or "").strip())
-
-        if (
-            not reply
-            or _contains_forbidden(reply)
-            or _safety_filter(reply)
-        ):
-            raise ValueError("unsafe rephrase")
-
+        if _contains_forbidden(reply):
+            return _safe_fallback(intent)
+        if _introduces_new_identifier(reply, session):
+            return _safe_fallback(intent)
         return reply
 
+    # Optional LLM rephrase (strictly bounded)
+    try:
+        out = chat_completion(
+            system_prompt="You are a cautious customer verifying an account issue.",
+            user_prompt=reply,
+            temperature=0.6,
+            max_tokens=90,
+        )
+        out = (out or "").strip()
+        out = _limit_sentences(out, max_sentences)
+
+        if (
+            not out
+            or _contains_forbidden(out)
+            or _count_questions(out) > 1
+            or _introduces_new_identifier(out, session)
+        ):
+            raise ValueError("unsafe_rephrase")
+
+        return out
     except Exception:
-        log.warning("LLM rephrase failed, falling back to safe template")
-        return random.choice(INTENT_TEMPLATES[INT_ASK_OFFICIAL_HELPLINE])
+        log(event="responder_fallback", intent=intent)
+        return _safe_fallback(intent)
