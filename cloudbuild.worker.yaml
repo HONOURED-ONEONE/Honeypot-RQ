@@ -1,43 +1,33 @@
-# cloudbuild.worker.yaml
-# Build + push worker image, then deploy to Cloud Run service.
-# Expected Dockerfile: docker/Dockerfile.worker
-# Build context: repository root (.)
-
 substitutions:
   _REGION: "asia-south1"
   _SERVICE: "honeypot-rq-worker"
-  _IMAGE: "gcr.io/$PROJECT_ID/honeypot-rq-worker:$COMMIT_SHA"
 
 steps:
-  # Build
   - name: "gcr.io/cloud-builders/docker"
     args:
       [
         "build",
-        "-t", "${_IMAGE}",
+        "-t", "gcr.io/$PROJECT_ID/honeypot-rq-worker:$COMMIT_SHA",
         "-f", "docker/Dockerfile.worker",
         "."
       ]
 
-  # Push
   - name: "gcr.io/cloud-builders/docker"
-    args: ["push", "${_IMAGE}"]
+    args: ["push", "gcr.io/$PROJECT_ID/honeypot-rq-worker:$COMMIT_SHA"]
 
-  # Deploy (worker usually should NOT be public)
   - name: "gcr.io/google.com/cloudsdktool/cloud-sdk:slim"
     entrypoint: "gcloud"
     args:
       [
         "run", "deploy", "${_SERVICE}",
-        "--image", "${_IMAGE}",
+        "--image", "gcr.io/$PROJECT_ID/honeypot-rq-worker:$COMMIT_SHA",
         "--region", "${_REGION}",
         "--platform", "managed",
         "--no-allow-unauthenticated"
       ]
 
 images:
-  - "${_IMAGE}"
-
+  - "gcr.io/$PROJECT_ID/honeypot-rq-worker:$COMMIT_SHA"
 
 options:
   logging: CLOUD_LOGGING_ONLY

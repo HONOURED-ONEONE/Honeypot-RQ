@@ -1,42 +1,34 @@
-# cloudbuild.api.yaml
-# Build + push API image, then deploy to Cloud Run service.
-# Expected Dockerfile: docker/Dockerfile.api
-# Build context: repository root (.)
-
 substitutions:
   _REGION: "asia-south1"
   _SERVICE: "honeypot-rq-api"
-  _IMAGE: "gcr.io/$PROJECT_ID/honeypot-rq-api:$COMMIT_SHA"
 
 steps:
-  # Build
   - name: "gcr.io/cloud-builders/docker"
     args:
       [
         "build",
-        "-t", "${_IMAGE}",
+        "-t", "gcr.io/$PROJECT_ID/honeypot-rq-api:$COMMIT_SHA",
         "-f", "docker/Dockerfile.api",
         "."
       ]
 
-  # Push
   - name: "gcr.io/cloud-builders/docker"
-    args: ["push", "${_IMAGE}"]
+    args: ["push", "gcr.io/$PROJECT_ID/honeypot-rq-api:$COMMIT_SHA"]
 
-  # Deploy to Cloud Run
   - name: "gcr.io/google.com/cloudsdktool/cloud-sdk:slim"
     entrypoint: "gcloud"
     args:
       [
         "run", "deploy", "${_SERVICE}",
-        "--image", "${_IMAGE}",
+        "--image", "gcr.io/$PROJECT_ID/honeypot-rq-api:$COMMIT_SHA",
         "--region", "${_REGION}",
         "--platform", "managed",
-        "--allow-unauthenticated"
+        "--allow-unauthenticated",
+        "--set-secrets", "API_KEY=honeypot_api_key:latest"
       ]
 
 images:
-  - "${_IMAGE}"
+  - "gcr.io/$PROJECT_ID/honeypot-rq-api:$COMMIT_SHA"
 
 options:
   logging: CLOUD_LOGGING_ONLY
