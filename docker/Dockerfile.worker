@@ -1,6 +1,14 @@
 FROM python:3.11-slim
 WORKDIR /app
+
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
+
 COPY . .
-CMD ["rq", "worker", "callback", "--url", "redis://redis:6379/0"]
+
+# Run two burst cycles per execution, ~30 seconds apart
+CMD ["sh", "-c", "\
+  rq worker \"${RQ_QUEUE_NAME:-callback}\" --url \"${REDIS_URL}\" --burst && \
+  sleep 30 && \
+  rq worker \"${RQ_QUEUE_NAME:-callback}\" --url \"${REDIS_URL}\" --burst \
+"]
