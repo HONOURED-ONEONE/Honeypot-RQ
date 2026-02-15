@@ -7,8 +7,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY . .
 
 # Run two burst cycles per execution, ~30 seconds apart
-CMD ["sh", "-c", "\
-  rq worker \"${RQ_QUEUE_NAME:-callback}\" --url \"${REDIS_URL}\" --burst && \
-  sleep 30 && \
+CMD ["sh", "-c", "set -e; \
+  rq worker \"${RQ_QUEUE_NAME:-callback}\" --url \"${REDIS_URL}\" --burst; \
+  sleep 30; \
   rq worker \"${RQ_QUEUE_NAME:-callback}\" --url \"${REDIS_URL}\" --burst \
 "]
