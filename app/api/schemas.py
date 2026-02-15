@@ -1,4 +1,4 @@
-from typing import List, Literal, Optional, Union
+from typing import Any, Dict, List, Literal, Optional, Union
 from pydantic import BaseModel, Field
 
 Sender = Literal["scammer", "user"]
@@ -18,7 +18,8 @@ class HoneypotRequest(BaseModel):
     sessionId: str
     message: Message
     conversationHistory: List[Message] = Field(default_factory=list)
-    metadata: Optional[Metadata] = None
+    detection: Optional[Dict[str, Any]] = None
+    metadata: Optional[Dict[str, Any]] = None
 
 class HoneypotResponse(BaseModel):
     status: Literal["success", "error"] = "success"

@@ -6,7 +6,7 @@ import httpx
 # Expect base url to include /v1
 VLLM_BASE_URL = os.getenv("VLLM_BASE_URL", "").rstrip("/")
 VLLM_API_KEY = os.getenv("VLLM_API_KEY", "")
-VLLM_MODEL = os.getenv("VLLM_MODEL", "mistralai/Mistral-Small-3.1-24B-Instruct-2503")
+VLLM_MODEL = os.getenv("VLLM_MODEL", "qwen/Qwen-2.5-14B-Instruct-AWQ")
 
 _client = httpx.Client(timeout=90)
 
