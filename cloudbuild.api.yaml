@@ -23,8 +23,7 @@ steps:
         "--image", "gcr.io/$PROJECT_ID/honeypot-rq-api:$COMMIT_SHA",
         "--region", "${_REGION}",
         "--platform", "managed",
-        "--allow-unauthenticated",
-        "--set-secrets", "API_KEY=honeypot_api_key:latest"
+        "--allow-unauthenticated"
       ]
 
 images:
