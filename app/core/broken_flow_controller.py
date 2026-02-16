@@ -1,103 +1,230 @@
-from typing import List, Optional
-
-from app.core.broken_flow_constants import (
-    HIGH_YIELD_ARTIFACT_INTENTS,
-    SECONDARY_FAILURE_INTENTS,
-    SINGLE_USE_BOUNDARY_INTENTS,
-    CLOSING_INTENTS,
-)
-from app.core.state_machine import determine_next_intent
-from app.core.session_repo import SessionState
-from app.core.settings import settings
+import hashlib
+import json
+from typing import Dict, Any, List
+from app.core.broken_flow_constants import *
+from app.core.state_machine import *
+from app.store.models import SessionState
+from app.core.finalize import should_finalize
+from app.intel.artifact_registry import artifact_registry
+from app.settings import settings as default_settings
 
 
-def _get_repeat_limit() -> int:
+# ============================================================
+# Registry-Driven Logic
+# ============================================================
+
+ARTIFACT_INTENT_MAP = {
+    "phoneNumbers": INT_ASK_OFFICIAL_HELPLINE,
+    "phishingLinks": INT_ASK_OFFICIAL_WEBSITE,
+}
+
+
+def compute_ioc_signature(intel_dict: Dict[str, Any]) -> str:
+    data = {}
+    for key in artifact_registry.artifacts.keys():
+        if key in intel_dict:
+            data[key] = sorted(intel_dict[key])
+    encoded = json.dumps(data, sort_keys=True).encode()
+    return hashlib.md5(encoded).hexdigest()
+
+
+def _pick_missing_intel_intent(
+    intel_dict: Dict[str, Any],
+    recent_intents: List[str],
+) -> str:
     """
-    Defensive access to repeat limit.
-    Prevents crash if settings is misconfigured.
+    Improved registry-driven intent selection:
+    - Strict priority ordering
+    - Strong cooldown (last 3 intents)
+    - Deterministic
+    - No structural changes
     """
-    return getattr(settings, "BF_REPEAT_LIMIT", 2)
+
+    specs = sorted(
+        artifact_registry.artifacts.values(),
+        key=lambda x: (x.priority, not x.passive_only),
+        reverse=True,
+    )
+
+    recent_window = set(recent_intents[-3:])
+
+    # First pass: respect cooldown strictly
+    for spec in specs:
+        if not spec.ask_enabled or spec.passive_only:
+            continue
+
+        intent = ARTIFACT_INTENT_MAP.get(spec.key)
+        if not intent:
+            continue
+
+        if intel_dict.get(spec.key):
+            continue
+
+        if intent in recent_window:
+            continue
+
+        return intent
+
+    # Second pass: relax cooldown once to avoid deadlock
+    for spec in specs:
+        if not spec.ask_enabled or spec.passive_only:
+            continue
+
+        intent = ARTIFACT_INTENT_MAP.get(spec.key)
+        if not intent:
+            continue
+
+        if not intel_dict.get(spec.key):
+            return intent
+
+    return INT_ACK_CONCERN
 
 
-def _filter_intents(candidates: List[str], allowed_group: set) -> List[str]:
-    """
-    Restrict candidate intents to a specific intent group.
-    """
-    return [i for i in candidates if i in allowed_group]
+def _pivot_intent(intel_dict: Dict[str, Any], recent_intents: List[str], avoid_intent: str) -> str:
+    return _pick_missing_intel_intent(intel_dict, recent_intents + [avoid_intent])
 
+
+# ============================================================
+# Controller
+# ============================================================
 
 def choose_next_action(
     session: SessionState,
-    artifact_state: dict,
-    detection: Optional[dict] = None,
-) -> str:
-    """
-    Controller responsible for selecting the next intent.
+    latest_text: str,
+    intel_dict: Dict[str, Any],
+    detection_dict: Dict[str, Any],
+    settings: Any,
+) -> Dict[str, Any]:
 
-    Invariants:
-    - Controller never decides content, only intent.
-    - Artifact registry drives progression.
-    - Boundary loops are capped.
-    - Escalation enforced after repeat threshold.
-    - Finalization gating remains external.
-    """
+    if settings is None or isinstance(settings, dict):
+        settings = default_settings
 
-    # Determine baseline candidate intents from state machine
-    candidates: List[str] = determine_next_intent(
-        artifact_state=artifact_state,
-        session=session,
-        detection=detection or {},
-    )
+    # ------------------------------------------------------------
+    # Session defaults
+    # ------------------------------------------------------------
 
-    if not candidates:
-        return None
+    session.bf_state = getattr(session, "bf_state", BF_S0)
+    session.bf_last_intent = getattr(session, "bf_last_intent", None)
+    session.bf_repeat_count = getattr(session, "bf_repeat_count", 0)
+    session.bf_no_progress_count = getattr(session, "bf_no_progress_count", 0)
+    session.bf_secondary_bounce_count = getattr(session, "bf_secondary_bounce_count", 0)
+    session.bf_policy_refused_once = getattr(session, "bf_policy_refused_once", False)
+    session.bf_recent_intents = getattr(session, "bf_recent_intents", [])
+    session.bf_last_ioc_signature = getattr(session, "bf_last_ioc_signature", None)
 
-    last_intent = session.last_intent
-    repeat_limit = _get_repeat_limit()
+    # ------------------------------------------------------------
+    # IOC Progress Detection
+    # ------------------------------------------------------------
 
-    # ------------------------------------------------------------------
-    # Repeat Tracking
-    # ------------------------------------------------------------------
-    if last_intent and candidates and last_intent == candidates[0]:
+    new_signature = compute_ioc_signature(intel_dict)
+    new_intel_received = False
+
+    if session.bf_last_ioc_signature is None:
+        session.bf_last_ioc_signature = new_signature
+        if any(intel_dict.get(k) for k in artifact_registry.artifacts.keys()):
+            new_intel_received = True
+    elif new_signature != session.bf_last_ioc_signature:
+        new_intel_received = True
+        session.bf_no_progress_count = 0
+        session.bf_last_ioc_signature = new_signature
+    else:
+        session.bf_no_progress_count += 1
+
+    intent = None
+    force_finalize = False
+    reason = "normal_flow"
+
+    # ------------------------------------------------------------
+    # State Advancement via Intel
+    # ------------------------------------------------------------
+
+    if new_intel_received:
+        if intel_dict.get("upiIds") or intel_dict.get("bankAccounts"):
+            if session.bf_state in (BF_S0, BF_S1, BF_S2, BF_S3):
+                session.bf_state = BF_S4
+        elif intel_dict.get("phoneNumbers"):
+            if session.bf_state in (BF_S0, BF_S1, BF_S2):
+                session.bf_state = BF_S3
+        elif intel_dict.get("phishingLinks"):
+            if session.bf_state in (BF_S0, BF_S1):
+                session.bf_state = BF_S2
+
+    # ------------------------------------------------------------
+    # Progress-based loop breaking
+    # ------------------------------------------------------------
+
+    if session.bf_state == BF_S1:
+        session.bf_state = BF_S2
+    elif session.bf_state == BF_S2 and session.bf_no_progress_count >= settings.BF_NO_PROGRESS_TURNS:
+        session.bf_state = BF_S3
+    elif session.bf_state == BF_S3 and session.bf_no_progress_count >= settings.BF_NO_PROGRESS_TURNS:
+        if session.bf_secondary_bounce_count < settings.BF_SECONDARY_BOUNCE_LIMIT:
+            session.bf_state = BF_S4
+            session.bf_secondary_bounce_count += 1
+        else:
+            session.bf_state = BF_S5
+    elif session.bf_state == BF_S4 and session.bf_no_progress_count >= settings.BF_NO_PROGRESS_TURNS:
+        session.bf_state = BF_S5
+
+    # ------------------------------------------------------------
+    # Intent Selection
+    # ------------------------------------------------------------
+
+    if session.bf_state == BF_S0:
+        session.bf_state = BF_S1
+        intent = INT_ACK_CONCERN
+    elif session.bf_state == BF_S1:
+        intent = INT_ACK_CONCERN
+    elif session.bf_state in (BF_S2, BF_S3, BF_S4):
+        intent = _pick_missing_intel_intent(intel_dict, session.bf_recent_intents)
+    elif session.bf_state == BF_S5:
+        intent = INT_CLOSE_AND_VERIFY_SELF
+        force_finalize = True
+    else:
+        intent = INT_CLOSE_AND_VERIFY_SELF
+        force_finalize = True
+
+    # ------------------------------------------------------------
+    # Close Gating
+    # ------------------------------------------------------------
+
+    if intent == INT_CLOSE_AND_VERIFY_SELF:
+        if should_finalize(session) is None:
+            intent = _pick_missing_intel_intent(intel_dict, session.bf_recent_intents)
+            force_finalize = False
+            reason = "close_gated_pivot"
+
+    # ------------------------------------------------------------
+    # Repetition Breaker + Escalation
+    # ------------------------------------------------------------
+
+    if intent == session.bf_last_intent:
         session.bf_repeat_count += 1
     else:
         session.bf_repeat_count = 0
 
-    # ------------------------------------------------------------------
-    # Escalation Rule:
-    # If boundary intent repeats beyond threshold,
-    # force transition into high-yield artifact acquisition.
-    # ------------------------------------------------------------------
-    if (
-        last_intent in SINGLE_USE_BOUNDARY_INTENTS
-        and session.bf_repeat_count >= repeat_limit
-    ):
-        high_yield = _filter_intents(candidates, HIGH_YIELD_ARTIFACT_INTENTS)
+    if session.bf_repeat_count >= settings.BF_REPEAT_LIMIT:
 
-        if high_yield:
-            selected = high_yield[0]
-            session.last_intent = selected
-            session.bf_repeat_count = 0
-            return selected
+        # Escalate state before pivoting
+        if session.bf_state in (BF_S2, BF_S3):
+            session.bf_state = BF_S4
+        elif session.bf_state == BF_S4:
+            session.bf_state = BF_S5
 
-        secondary = _filter_intents(candidates, SECONDARY_FAILURE_INTENTS)
-
-        if secondary:
-            selected = secondary[0]
-            session.last_intent = selected
-            session.bf_repeat_count = 0
-            return selected
-
-    # ------------------------------------------------------------------
-    # Prevent infinite closing loops
-    # ------------------------------------------------------------------
-    if last_intent in CLOSING_INTENTS and session.bf_repeat_count > 0:
+        intent = _pivot_intent(intel_dict, session.bf_recent_intents, intent)
         session.bf_repeat_count = 0
+        reason = "repetition_escalation"
 
-    # ------------------------------------------------------------------
-    # Default Selection (First Valid Candidate)
-    # ------------------------------------------------------------------
-    selected = candidates[0]
-    session.last_intent = selected
+    # ------------------------------------------------------------
 
-    return selected
+    session.bf_last_intent = intent
+    session.bf_recent_intents.append(intent)
+    if len(session.bf_recent_intents) > 10:
+        session.bf_recent_intents.pop(0)
+
+    return {
+        "bf_state": session.bf_state,
+        "intent": intent,
+        "reason": reason,
+        "force_finalize": force_finalize,
+    }
