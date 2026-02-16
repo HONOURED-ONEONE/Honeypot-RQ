@@ -1,7 +1,6 @@
 from dataclasses import dataclass, field
 from typing import List, Optional
 
-
 @dataclass
 class Intelligence:
     bankAccounts: List[str] = field(default_factory=list)
@@ -9,19 +8,30 @@ class Intelligence:
     phishingLinks: List[str] = field(default_factory=list)
     phoneNumbers: List[str] = field(default_factory=list)
 
-
 @dataclass
 class SessionState:
-    sessionId: str
-    state: str = "INIT"  # INIT|MONITORING|ENGAGED|READY_TO_REPORT|REPORTED|CLOSED
+    # Core identifiers
+    sessionId: str = ""
+
+    # Conversation counters (canonical)
+    turnIndex: int = 0  # ✅ always present
+
+    # Keep for backward-compat / reporting, but derive from turnIndex when needed
+    totalMessagesExchanged: int = 0
+
+    # State
+    state: str = "INIT"  # INIT/MONITORING/ENGAGED/READY_TO_REPORT/REPORTED/CLOSED
     scamDetected: bool = False
     confidence: float = 0.0
     scamType: Optional[str] = None
-    totalMessagesExchanged: int = 0
+
+    # Conversation storage
     conversation: List[dict] = field(default_factory=list)
     extractedIntelligence: Intelligence = field(default_factory=Intelligence)
+
+    # Ops
     agentNotes: str = ""
-    callbackStatus: str = "none"  # none|queued|sent|failed
+    callbackStatus: str = "none"  # none/queued/sent/failed
     lastUpdatedAtEpoch: Optional[int] = None
 
     # Broken-Flow state + counters
@@ -34,3 +44,23 @@ class SessionState:
     bf_last_ioc_signature: str = ""
     bf_recent_intents: List[str] = field(default_factory=list)
     bf_fallback_used: bool = False
+
+    def __post_init__(self):
+        """
+        Keep counters consistent:
+        - If older sessions only had totalMessagesExchanged, populate turnIndex.
+        - Always keep totalMessagesExchanged in sync with turnIndex.
+        """
+        if self.turnIndex is None:
+            self.turnIndex = 0
+
+        # If loaded session had totalMessagesExchanged but not turnIndex, use it.
+        if self.turnIndex == 0 and self.totalMessagesExchanged:
+            self.turnIndex = int(self.totalMessagesExchanged)
+
+        # Last-resort: infer from conversation length if both are missing/zero.
+        if self.turnIndex == 0 and self.conversation:
+            self.turnIndex = len(self.conversation)
+
+        # Sync the legacy field to canonical field
+        self.totalMessagesExchanged = int(self.turnIndex)

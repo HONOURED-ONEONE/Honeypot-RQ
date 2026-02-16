@@ -6,6 +6,22 @@ from app.store.models import SessionState, Intelligence
 
 PREFIX = "session:"
 
+def _migrate_session_data(data: dict) -> dict:
+    """
+    Backward-compat migration for stored sessions.
+    Ensures `turnIndex` exists and is an int, and keeps `totalMessagesExchanged` synced.
+    """
+    # If stored sessions used only totalMessagesExchanged, backfill turnIndex
+    if "turnIndex" not in data or data.get("turnIndex") is None:
+        legacy = data.get("totalMessagesExchanged") or 0
+        convo = data.get("conversation") or []
+        inferred = len(convo) if isinstance(convo, list) else 0
+        data["turnIndex"] = int(legacy or inferred or 0)
+
+    # Sync legacy field too
+    data["totalMessagesExchanged"] = int(data.get("turnIndex") or 0)
+
+    return data
 
 def _key(session_id: str) -> str:
     return f"{PREFIX}{session_id}"
@@ -50,7 +66,6 @@ def _filter_session_kwargs(data: dict) -> dict:
 def load_session(session_id: str) -> SessionState:
     r = get_redis()
     raw = r.get(_key(session_id))
-
     if not raw:
         s = SessionState(sessionId=session_id)
         s.lastUpdatedAtEpoch = int(time.time())
@@ -62,19 +77,25 @@ def load_session(session_id: str) -> SessionState:
     intel = Intelligence(**data.get("extractedIntelligence", {}))
     data["extractedIntelligence"] = intel
 
-    # Rehydrate sets + drop unknown fields
+    # Rehydrate sets
     data = _rehydrate_sets(data)
+
+    # ✅ Migration step (permanent fix for old sessions)
+    data = _migrate_session_data(data)
+
+    # Drop unknown fields
     data = _filter_session_kwargs(data)
 
     return SessionState(**data)
-
 
 def save_session(session: SessionState) -> None:
     r = get_redis()
     session.lastUpdatedAtEpoch = int(time.time())
 
+    # ✅ keep legacy field synced for older readers/tools
+    session.totalMessagesExchanged = int(getattr(session, "turnIndex", 0) or 0)
+
     data = session.__dict__.copy()
     data["extractedIntelligence"] = session.extractedIntelligence.__dict__
-
     safe_data = _json_safe(data)
     r.set(_key(session.sessionId), json.dumps(safe_data))
