@@ -16,6 +16,8 @@ from app.settings import settings as default_settings
 ARTIFACT_INTENT_MAP = {
     "phoneNumbers": INT_ASK_OFFICIAL_HELPLINE,
     "phishingLinks": INT_ASK_OFFICIAL_WEBSITE,
+    "upiIds": INT_ASK_ALT_VERIFICATION,
+    "bankAccounts": INT_CHANNEL_FAIL,
 }
 
 
