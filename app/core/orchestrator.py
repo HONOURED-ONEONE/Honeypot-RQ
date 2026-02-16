@@ -8,7 +8,7 @@ Orchestrator Invariants (Non-Negotiable)
   - responder invocation
   - finalize gating
 """
-
+from app.llm.detector import detect_scam
 from app.store.session_repo import load_session, save_session
 from app.core.broken_flow_controller import choose_next_action
 from app.llm.responder import generate_agent_reply
@@ -22,6 +22,13 @@ from app.core.guvi_callback import enqueue_guvi_final_result  # ✅ NEW
 def handle_event(req):
     # Load session
     session = load_session(req.sessionId)
+    result = detect_scam(req, session)
+
+    if result["scamDetected"] and result["confidence"] >= app_settings.SCAM_THRESHOLD:
+        if not getattr(session, "scamType", None) or session.scamType is None:
+            session.scamType = result["scamType"]
+
+    session.scam_type = getattr(session, "scam_type", None)
 
     # Controller
     controller_out = choose_next_action(
