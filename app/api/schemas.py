@@ -20,6 +20,7 @@ class HoneypotRequest(BaseModel):
     conversationHistory: List[Message] = Field(default_factory=list)
     detection: Optional[Dict[str, Any]] = None
     metadata: Optional[Dict[str, Any]] = None
+    settings: Optional[Dict[str, Any]] = None
 
 class HoneypotResponse(BaseModel):
     status: Literal["success", "error"] = "success"
