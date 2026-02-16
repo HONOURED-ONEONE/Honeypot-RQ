@@ -5,3 +5,5 @@ redis>=5.0
 rq>=2.6
 httpx>=0.25
 python-dotenv>=1.0
+
+starlette

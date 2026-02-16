@@ -32,7 +32,18 @@ async def _handle_honeypot(request: Request, payload: Any) -> HoneypotResponse:
     req = HoneypotRequest.model_validate(normalized)
     out = await run_in_threadpool(handle_event, req)
 
-    return HoneypotResponse(status="success", **out)
+    reply_val = ""
+    if isinstance(out, tuple) and len(out) == 1:
+        out = out[0]
+    if isinstance(out, dict):
+        reply_val = out.get("reply") or ""
+    elif isinstance(out, str):
+        reply_val = out
+    else:
+        reply_val = str(out)
+
+    return HoneypotResponse(status="success", reply=reply_val)
+
 
 
 # ✅ Main endpoint (what the spec expects)
@@ -45,7 +56,6 @@ async def _handle_honeypot(request: Request, payload: Any) -> HoneypotResponse:
 async def honeypot_api(request: Request, payload: Any = Body(None)):
     return await _handle_honeypot(request, payload)
 
-
 # ✅ Root alias (some endpoint testers keep calling only /)
 @router.api_route(
     "/",
@@ -53,5 +63,6 @@ async def honeypot_api(request: Request, payload: Any = Body(None)):
     response_model=HoneypotResponse,
     dependencies=[Depends(require_api_key)],
 )
+
 async def honeypot_root(request: Request, payload: Any = Body(None)):
     return await _handle_honeypot(request, payload)

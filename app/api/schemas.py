@@ -25,4 +25,3 @@ class HoneypotRequest(BaseModel):
 class HoneypotResponse(BaseModel):
     status: Literal["success", "error"] = "success"
     reply: str
-    finalized: bool = False
