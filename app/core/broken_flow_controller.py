@@ -1,186 +1,103 @@
-import hashlib
-import json
-from typing import Dict, Any, List
-from app.core.broken_flow_constants import *
-from app.core.state_machine import *
-from app.store.models import SessionState
-from app.core.finalize import should_finalize
-from app.intel.artifact_registry import artifact_registry
-from app.settings import settings as default_settings
+from typing import List, Optional
+
+from app.core.broken_flow_constants import (
+    HIGH_YIELD_ARTIFACT_INTENTS,
+    SECONDARY_FAILURE_INTENTS,
+    SINGLE_USE_BOUNDARY_INTENTS,
+    CLOSING_INTENTS,
+)
+from app.core.state_machine import determine_next_intent
+from app.core.session_repo import SessionState
+from app.core.settings import settings
 
 
-# ============================================================
-# Registry-Driven Logic
-# ============================================================
-
-# Mapping for registry keys to intents (Single-question-per-turn invariant)
-ARTIFACT_INTENT_MAP = {
-    "phoneNumbers": INT_ASK_OFFICIAL_HELPLINE,
-    "phishingLinks": INT_ASK_OFFICIAL_WEBSITE,
-}
-
-def compute_ioc_signature(intel_dict: Dict[str, Any]) -> str:
+def _get_repeat_limit() -> int:
     """
-    Stable signature of extracted IOCs to detect progress.
-    Derived ONLY from registry keys.
+    Defensive access to repeat limit.
+    Prevents crash if settings is misconfigured.
     """
-    data = {}
-    for key in artifact_registry.artifacts.keys():
-        if key in intel_dict:
-            data[key] = sorted(intel_dict[key])
-    encoded = json.dumps(data, sort_keys=True).encode()
-    return hashlib.md5(encoded).hexdigest()
+    return getattr(settings, "BF_REPEAT_LIMIT", 2)
 
 
-def _pick_missing_intel_intent(intel_dict: Dict[str, Any], recent_intents: List[str]) -> str:
+def _filter_intents(candidates: List[str], allowed_group: set) -> List[str]:
     """
-    Select next intent based on registry priority, ask_enabled, and cooldown.
-    Deterministic and pure registry math.
+    Restrict candidate intents to a specific intent group.
     """
-    # Sorted by priority (descending)
-    specs = sorted(artifact_registry.artifacts.values(), key=lambda x: x.priority, reverse=True)
-    
-    for spec in specs:
-        if not spec.ask_enabled or spec.passive_only:
-            continue
-        
-        intent = ARTIFACT_INTENT_MAP.get(spec.key)
-        if not intent:
-            continue
-            
-        # Check missing status based on registry keys
-        if not intel_dict.get(spec.key):
-            # Cooldown to prevent repetitive loops
-            if intent in recent_intents[-3:]:
-                continue
-            return intent
-            
-    return INT_ACK_CONCERN
+    return [i for i in candidates if i in allowed_group]
 
-
-def _pivot_intent(intel_dict: Dict[str, Any], recent_intents: List[str], avoid_intent: str) -> str:
-    """
-    Forced pivot using registry priority and cooldown.
-    """
-    # Exclude the current repetitive intent by adding it to recent_intents for this call
-    return _pick_missing_intel_intent(intel_dict, recent_intents + [avoid_intent])
-
-
-# ============================================================
-# Controller
-# ============================================================
 
 def choose_next_action(
     session: SessionState,
-    latest_text: str,
-    intel_dict: Dict[str, Any],
-    detection_dict: Dict[str, Any],
-    settings: Any,
-) -> Dict[str, Any]:
+    artifact_state: dict,
+    detection: Optional[dict] = None,
+) -> str:
     """
-    Deterministic broken-flow controller.
-    - Controller owns ALL state transitions
-    - Registry-driven intelligence pursuit
+    Controller responsible for selecting the next intent.
+
+    Invariants:
+    - Controller never decides content, only intent.
+    - Artifact registry drives progression.
+    - Boundary loops are capped.
+    - Escalation enforced after repeat threshold.
+    - Finalization gating remains external.
     """
-    if settings is None or isinstance(settings, dict):
-        settings = default_settings
 
-    # 1. Session defaults (backward compatible)
-    session.bf_state = getattr(session, "bf_state", BF_S0)
-    session.bf_last_intent = getattr(session, "bf_last_intent", None)
-    session.bf_repeat_count = getattr(session, "bf_repeat_count", 0)
-    session.bf_no_progress_count = getattr(session, "bf_no_progress_count", 0)
-    session.bf_secondary_bounce_count = getattr(session, "bf_secondary_bounce_count", 0)
-    session.bf_policy_refused_once = getattr(session, "bf_policy_refused_once", False)
-    session.bf_recent_intents = getattr(session, "bf_recent_intents", [])
-    session.bf_last_ioc_signature = getattr(session, "bf_last_ioc_signature", None)
+    # Determine baseline candidate intents from state machine
+    candidates: List[str] = determine_next_intent(
+        artifact_state=artifact_state,
+        session=session,
+        detection=detection or {},
+    )
 
-    # 2. Progress detection (IOC-based, Registry-only)
-    new_signature = compute_ioc_signature(intel_dict)
-    new_intel_received = False
+    if not candidates:
+        return None
 
-    if session.bf_last_ioc_signature is None:
-        session.bf_last_ioc_signature = new_signature
-        if any(intel_dict.get(k) for k in artifact_registry.artifacts.keys()):
-            new_intel_received = True
-    elif new_signature != session.bf_last_ioc_signature:
-        new_intel_received = True
-        session.bf_no_progress_count = 0
-        session.bf_last_ioc_signature = new_signature
-    else:
-        session.bf_no_progress_count += 1
+    last_intent = session.last_intent
+    repeat_limit = _get_repeat_limit()
 
-    intent = None
-    force_finalize = False
-    reason = "normal_flow"
-
-    # 3. State progression driven by intelligence surfaces
-    if new_intel_received:
-        if intel_dict.get("upiIds") or intel_dict.get("bankAccounts"):
-            if session.bf_state in (BF_S0, BF_S1, BF_S2, BF_S3):
-                session.bf_state = BF_S4
-        elif intel_dict.get("phoneNumbers"):
-            if session.bf_state in (BF_S0, BF_S1, BF_S2):
-                session.bf_state = BF_S3
-        elif intel_dict.get("phishingLinks"):
-            if session.bf_state in (BF_S0, BF_S1):
-                session.bf_state = BF_S2
-
-    # 4. Progress-based advancement (broken loops)
-    if session.bf_state == BF_S1:
-        session.bf_state = BF_S2
-    elif session.bf_state == BF_S2 and session.bf_no_progress_count >= settings.BF_NO_PROGRESS_TURNS:
-        session.bf_state = BF_S3
-    elif session.bf_state == BF_S3 and session.bf_no_progress_count >= settings.BF_NO_PROGRESS_TURNS:
-        if session.bf_secondary_bounce_count < settings.BF_SECONDARY_BOUNCE_LIMIT:
-            session.bf_state = BF_S4
-            session.bf_secondary_bounce_count += 1
-        else:
-            session.bf_state = BF_S5
-    elif session.bf_state == BF_S4 and session.bf_no_progress_count >= settings.BF_NO_PROGRESS_TURNS:
-        session.bf_state = BF_S5
-
-    # 5. Intent selection (Registry-driven)
-    if session.bf_state == BF_S0:
-        session.bf_state = BF_S1
-        intent = INT_ACK_CONCERN
-    elif session.bf_state == BF_S1:
-        intent = INT_ACK_CONCERN
-    elif session.bf_state in (BF_S2, BF_S3, BF_S4):
-        intent = _pick_missing_intel_intent(intel_dict, session.bf_recent_intents)
-    elif session.bf_state == BF_S5:
-        intent = INT_CLOSE_AND_VERIFY_SELF
-        force_finalize = True
-    else:
-        intent = INT_CLOSE_AND_VERIFY_SELF
-        force_finalize = True
-
-    # 6. Close gating
-    if intent == INT_CLOSE_AND_VERIFY_SELF:
-        if should_finalize(session) is None:
-            intent = _pick_missing_intel_intent(intel_dict, session.bf_recent_intents)
-            force_finalize = False
-            reason = "close_gated_pivot"
-
-    # 7. Repetition breaker (Pivot using registry math)
-    if intent == session.bf_last_intent:
+    # ------------------------------------------------------------------
+    # Repeat Tracking
+    # ------------------------------------------------------------------
+    if last_intent and candidates and last_intent == candidates[0]:
         session.bf_repeat_count += 1
     else:
         session.bf_repeat_count = 0
 
-    if session.bf_repeat_count >= settings.BF_REPEAT_LIMIT:
-        intent = _pivot_intent(intel_dict, session.bf_recent_intents, intent)
+    # ------------------------------------------------------------------
+    # Escalation Rule:
+    # If boundary intent repeats beyond threshold,
+    # force transition into high-yield artifact acquisition.
+    # ------------------------------------------------------------------
+    if (
+        last_intent in SINGLE_USE_BOUNDARY_INTENTS
+        and session.bf_repeat_count >= repeat_limit
+    ):
+        high_yield = _filter_intents(candidates, HIGH_YIELD_ARTIFACT_INTENTS)
+
+        if high_yield:
+            selected = high_yield[0]
+            session.last_intent = selected
+            session.bf_repeat_count = 0
+            return selected
+
+        secondary = _filter_intents(candidates, SECONDARY_FAILURE_INTENTS)
+
+        if secondary:
+            selected = secondary[0]
+            session.last_intent = selected
+            session.bf_repeat_count = 0
+            return selected
+
+    # ------------------------------------------------------------------
+    # Prevent infinite closing loops
+    # ------------------------------------------------------------------
+    if last_intent in CLOSING_INTENTS and session.bf_repeat_count > 0:
         session.bf_repeat_count = 0
-        reason = "repetition_pivot"
 
-    session.bf_last_intent = intent
-    session.bf_recent_intents.append(intent)
-    if len(session.bf_recent_intents) > 10:
-        session.bf_recent_intents.pop(0)
+    # ------------------------------------------------------------------
+    # Default Selection (First Valid Candidate)
+    # ------------------------------------------------------------------
+    selected = candidates[0]
+    session.last_intent = selected
 
-    return {
-        "bf_state": session.bf_state,
-        "intent": intent,
-        "reason": reason,
-        "force_finalize": force_finalize,
-    }
+    return selected
