@@ -28,27 +28,40 @@ def compute_ioc_signature(intel_dict: Dict[str, Any]) -> str:
     return hashlib.md5(encoded).hexdigest()
 
 
+# ------------------------------------------------------------
+# Scam-Aware Priority Boost
+# ------------------------------------------------------------
+
+def _scam_priority_boost(spec, scam_type: str) -> int:
+    if scam_type == "UPI_FRAUD" and spec.key in ("upiIds", "bankAccounts"):
+        return 10
+    if scam_type == "PHISHING" and spec.key == "phishingLinks":
+        return 10
+    if scam_type == "BANK_IMPERSONATION" and spec.key == "phoneNumbers":
+        return 8
+    if scam_type == "JOB_SCAM" and spec.key in ("phoneNumbers", "bankAccounts"):
+        return 6
+    return 0
+
+
 def _pick_missing_intel_intent(
     intel_dict: Dict[str, Any],
     recent_intents: List[str],
+    scam_type: str = "UNKNOWN",
 ) -> str:
-    """
-    Improved registry-driven intent selection:
-    - Strict priority ordering
-    - Strong cooldown (last 3 intents)
-    - Deterministic
-    - No structural changes
-    """
 
     specs = sorted(
         artifact_registry.artifacts.values(),
-        key=lambda x: (x.priority, not x.passive_only),
+        key=lambda x: (
+            x.priority + _scam_priority_boost(x, scam_type),
+            not x.passive_only,
+        ),
         reverse=True,
     )
 
     recent_window = set(recent_intents[-3:])
 
-    # First pass: respect cooldown strictly
+    # Strict cooldown pass
     for spec in specs:
         if not spec.ask_enabled or spec.passive_only:
             continue
@@ -65,7 +78,7 @@ def _pick_missing_intel_intent(
 
         return intent
 
-    # Second pass: relax cooldown once to avoid deadlock
+    # Relax cooldown pass
     for spec in specs:
         if not spec.ask_enabled or spec.passive_only:
             continue
@@ -80,8 +93,17 @@ def _pick_missing_intel_intent(
     return INT_ACK_CONCERN
 
 
-def _pivot_intent(intel_dict: Dict[str, Any], recent_intents: List[str], avoid_intent: str) -> str:
-    return _pick_missing_intel_intent(intel_dict, recent_intents + [avoid_intent])
+def _pivot_intent(
+    intel_dict: Dict[str, Any],
+    recent_intents: List[str],
+    avoid_intent: str,
+    scam_type: str = "UNKNOWN",
+) -> str:
+    return _pick_missing_intel_intent(
+        intel_dict,
+        recent_intents + [avoid_intent],
+        scam_type,
+    )
 
 
 # ============================================================
@@ -111,6 +133,7 @@ def choose_next_action(
     session.bf_policy_refused_once = getattr(session, "bf_policy_refused_once", False)
     session.bf_recent_intents = getattr(session, "bf_recent_intents", [])
     session.bf_last_ioc_signature = getattr(session, "bf_last_ioc_signature", None)
+    session.scam_type = getattr(session, "scam_type", "UNKNOWN")
 
     # ------------------------------------------------------------
     # IOC Progress Detection
@@ -150,7 +173,7 @@ def choose_next_action(
                 session.bf_state = BF_S2
 
     # ------------------------------------------------------------
-    # Progress-based loop breaking
+    # Loop Breaking
     # ------------------------------------------------------------
 
     if session.bf_state == BF_S1:
@@ -167,7 +190,7 @@ def choose_next_action(
         session.bf_state = BF_S5
 
     # ------------------------------------------------------------
-    # Intent Selection
+    # Intent Selection (Scam-aware)
     # ------------------------------------------------------------
 
     if session.bf_state == BF_S0:
@@ -176,7 +199,11 @@ def choose_next_action(
     elif session.bf_state == BF_S1:
         intent = INT_ACK_CONCERN
     elif session.bf_state in (BF_S2, BF_S3, BF_S4):
-        intent = _pick_missing_intel_intent(intel_dict, session.bf_recent_intents)
+        intent = _pick_missing_intel_intent(
+            intel_dict,
+            session.bf_recent_intents,
+            session.scam_type,
+        )
     elif session.bf_state == BF_S5:
         intent = INT_CLOSE_AND_VERIFY_SELF
         force_finalize = True
@@ -190,7 +217,11 @@ def choose_next_action(
 
     if intent == INT_CLOSE_AND_VERIFY_SELF:
         if should_finalize(session) is None:
-            intent = _pick_missing_intel_intent(intel_dict, session.bf_recent_intents)
+            intent = _pick_missing_intel_intent(
+                intel_dict,
+                session.bf_recent_intents,
+                session.scam_type,
+            )
             force_finalize = False
             reason = "close_gated_pivot"
 
@@ -205,13 +236,18 @@ def choose_next_action(
 
     if session.bf_repeat_count >= settings.BF_REPEAT_LIMIT:
 
-        # Escalate state before pivoting
         if session.bf_state in (BF_S2, BF_S3):
             session.bf_state = BF_S4
         elif session.bf_state == BF_S4:
             session.bf_state = BF_S5
 
-        intent = _pivot_intent(intel_dict, session.bf_recent_intents, intent)
+        intent = _pivot_intent(
+            intel_dict,
+            session.bf_recent_intents,
+            intent,
+            session.scam_type,
+        )
+
         session.bf_repeat_count = 0
         reason = "repetition_escalation"
 
@@ -227,4 +263,5 @@ def choose_next_action(
         "intent": intent,
         "reason": reason,
         "force_finalize": force_finalize,
+        "scam_type": session.scam_type,
     }
