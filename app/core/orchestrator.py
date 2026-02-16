@@ -21,6 +21,7 @@ from app.core.broken_flow_controller import choose_next_action
 from app.llm.responder import generate_agent_reply
 from app.core.finalize import should_finalize
 from app.observability.logging import log
+from app.settings import settings as app_settings
 
 
 def handle_event(req):
@@ -53,7 +54,7 @@ def handle_event(req):
         latest_text=req.message.text or "",
         intel_dict=session.extractedIntelligence.__dict__,
         detection_dict=req.detection.__dict__ if req.detection else {},
-        settings=req.settings,
+        settings=app_settings
     )
 
     intent = controller_out.get("intent")

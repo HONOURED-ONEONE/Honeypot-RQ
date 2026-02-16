@@ -6,6 +6,7 @@ from app.core.state_machine import *
 from app.store.models import SessionState
 from app.core.finalize import should_finalize
 from app.intel.artifact_registry import artifact_registry
+from app.settings import settings as default_settings
 
 
 # ============================================================
@@ -81,6 +82,8 @@ def choose_next_action(
     - Controller owns ALL state transitions
     - Registry-driven intelligence pursuit
     """
+    if settings is None or isinstance(settings, dict):
+        settings = default_settings
 
     # 1. Session defaults (backward compatible)
     session.bf_state = getattr(session, "bf_state", BF_S0)

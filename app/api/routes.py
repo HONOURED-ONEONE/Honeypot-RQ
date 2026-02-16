@@ -1,6 +1,7 @@
 from typing import Any
 
 from fastapi import APIRouter, Depends, Body, Request
+from starlette.concurrency import run_in_threadpool
 
 from app.api.schemas import HoneypotRequest, HoneypotResponse
 from app.api.auth import require_api_key
@@ -29,8 +30,9 @@ async def _handle_honeypot(request: Request, payload: Any) -> HoneypotResponse:
 
     normalized = normalize_honeypot_payload(payload)
     req = HoneypotRequest.model_validate(normalized)
-    reply = handle_event(req)
-    return HoneypotResponse(status="success", reply=reply)
+    out = await run_in_threadpool(handle_event, req)
+
+    return HoneypotResponse(status="success", **out)
 
 
 # ✅ Main endpoint (what the spec expects)
