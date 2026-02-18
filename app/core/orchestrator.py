@@ -81,17 +81,29 @@ def handle_event(req):
         pass
 
     result = detect_scam(req, session)
-
-    if result["scamDetected"] and result["confidence"] >= app_settings.SCAM_THRESHOLD:
-        if not getattr(session, "scamType", None) or session.scamType is None:
-            session.scamType = result["scamType"]
-
-    # ✅ P1.1: Unify scam type fields for controller priority boosts
-    # Keep 'scamType' canonical and ensure the controller-facing alias is always set.
+    # ✅ P0.4: Persist detector outcome to session (required for finalize + callback)
     try:
-        session.scam_type = session.scamType or "UNKNOWN"
+        session.scamDetected = bool(result.get("scamDetected", False))
     except Exception:
-        session.scam_type = "UNKNOWN"
+        session.scamDetected = False
+    try:
+        session.confidence = float(result.get("confidence", 0.0) or 0.0)
+    except Exception:
+        session.confidence = 0.0
+
+    # Maintain scam type consistently
+    try:
+        detected_type = str(result.get("scamType") or "UNKNOWN")
+        # Prefer keeping previously set scamType if already present and non-empty
+        if not getattr(session, "scamType", None):
+            session.scamType = detected_type
+        else:
+            # ensure it is a string
+            session.scamType = str(session.scamType)
+    except Exception:
+        session.scamType = "UNKNOWN"
+    # ✅ P1.1: Keep controller-facing alias in sync
+    session.scam_type = session.scamType or "UNKNOWN"
 
     # ✅ P0.1: Intelligence extraction BEFORE controller/finalize
     #    - Extract from the latest incoming message
