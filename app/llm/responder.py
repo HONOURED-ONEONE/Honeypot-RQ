@@ -215,8 +215,8 @@ def generate_agent_reply(req, session, intent: str) -> str:
     # Optional LLM rephrase (strictly bounded)
     try:
         out = chat_completion(
-            system_prompt="You are a cautious customer verifying an account issue.",
-            user_prompt=reply,
+            "You are a cautious customer verifying an account issue.",
+            reply,
             temperature=0.6,
             max_tokens=90,
         )

@@ -9,6 +9,13 @@ from app.intel.artifact_registry import artifact_registry
 from app.settings import settings as default_settings
 
 
+# ---------------------------------------------------------------------------
+# OTP/PIN boundary trigger (lightweight, controller-local)
+# We avoid importing detector internals; simple keyword check on latest_text.
+# ---------------------------------------------------------------------------
+_BOUNDARY_TERMS = ("otp", "pin", "password")
+
+
 # ============================================================
 # Registry-Driven Logic
 # ============================================================
@@ -138,6 +145,27 @@ def choose_next_action(
     session.scam_type = getattr(session, "scam_type", "UNKNOWN")
 
     # ------------------------------------------------------------
+    # PIVOT 0: Early boundary refusal if OTP/PIN appears and we haven't refused once.
+    # This improves realism and safety without revealing detection logic.
+    # ------------------------------------------------------------
+    latest_lc = (latest_text or "").lower()
+    otp_in_latest = any(t in latest_lc for t in _BOUNDARY_TERMS)
+    if otp_in_latest and not session.bf_policy_refused_once:
+        intent = INT_REFUSE_SENSITIVE_ONCE
+        session.bf_policy_refused_once = True
+        session.bf_last_intent = intent
+        session.bf_recent_intents.append(intent)
+        if len(session.bf_recent_intents) > 10:
+            session.bf_recent_intents.pop(0)
+        return {
+            "bf_state": session.bf_state,
+            "intent": intent,
+            "reason": "boundary_refusal",
+            "force_finalize": False,
+            "scam_type": session.scam_type,
+        }
+
+    # ------------------------------------------------------------
     # IOC Progress Detection
     # ------------------------------------------------------------
 
@@ -206,6 +234,12 @@ def choose_next_action(
             session.bf_recent_intents,
             session.scam_type,
         )
+
+        # PIVOT 1: When OTP terms are present and we still don't have a phone number,
+        # prefer asking for an official helpline (yields phoneNumbers) instead of looping ALT_VERIFICATION.
+        if otp_in_latest and not intel_dict.get("phoneNumbers"):
+            intent = INT_ASK_OFFICIAL_HELPLINE
+            reason = "otp_bias_helpline"
     elif session.bf_state == BF_S5:
         intent = INT_CLOSE_AND_VERIFY_SELF
         force_finalize = True
@@ -252,6 +286,19 @@ def choose_next_action(
 
         session.bf_repeat_count = 0
         reason = "repetition_escalation"
+
+    # ------------------------------------------------------------
+    # PIVOT 2: Cooldown for ALT_VERIFICATION to avoid repeated loops
+    # If ALT_VERIFICATION was chosen very recently (last 2 intents), pivot once.
+    # ------------------------------------------------------------
+    if intent == INT_ASK_ALT_VERIFICATION and intent in session.bf_recent_intents[-2:]:
+        intent = _pivot_intent(
+            intel_dict,
+            session.bf_recent_intents,
+            intent,
+            session.scam_type,
+        )
+        reason = "alt_verification_cooldown"
 
     # ------------------------------------------------------------
 
