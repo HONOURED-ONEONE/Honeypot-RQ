@@ -1,6 +1,7 @@
 import hashlib
 import json
 from typing import Dict, Any, List
+
 from app.core.broken_flow_constants import *
 from app.core.state_machine import *
 from app.store.models import SessionState
@@ -27,6 +28,10 @@ ARTIFACT_INTENT_MAP = {
     "bankAccounts": INT_CHANNEL_FAIL,
 }
 
+# Light helpers for repetition control
+_ACK_SET = {INT_ACK_CONCERN}
+_RECENT_WINDOW = 3  # small sliding window to judge recent intent patterns
+_ALT_COOLDOWN_WINDOW = 2
 
 def compute_ioc_signature(intel_dict: Dict[str, Any]) -> str:
     data = {}
@@ -72,7 +77,7 @@ def _pick_missing_intel_intent(
 
     # Strict cooldown pass
     for spec in specs:
-        if not spec.ask_enabled or spec.passive_only:
+        if not spec.enabled or not spec.ask_enabled or spec.passive_only:
             continue
 
         intent = ARTIFACT_INTENT_MAP.get(spec.key)
@@ -89,7 +94,7 @@ def _pick_missing_intel_intent(
 
     # Relax cooldown pass
     for spec in specs:
-        if not spec.ask_enabled or spec.passive_only:
+        if not spec.enabled or not spec.ask_enabled or spec.passive_only:
             continue
 
         intent = ARTIFACT_INTENT_MAP.get(spec.key)
@@ -99,6 +104,8 @@ def _pick_missing_intel_intent(
         if not intel_dict.get(spec.key):
             return intent
 
+    if len(recent_intents) >= 3 and all(x in _ACK_SET for x in recent_intents[-3:]):
+        return INT_ASK_ALT_VERIFICATION
     return INT_ACK_CONCERN
 
 
@@ -168,6 +175,13 @@ def choose_next_action(
     # ------------------------------------------------------------
     # IOC Progress Detection
     # ------------------------------------------------------------
+    # Stronger escalation when there is sustained no-progress
+    # If we've exceeded 2x the no-progress threshold, step up to SECONDARY_FAIL (non-terminal).
+    try:
+        if session.bf_no_progress_count >= (settings.BF_NO_PROGRESS_TURNS * 2):
+            session.bf_state = BF_S4  # controlled failure surface
+    except Exception:
+        pass
 
     new_signature = compute_ioc_signature(intel_dict)
     new_intel_received = False
@@ -235,8 +249,15 @@ def choose_next_action(
             session.scam_type,
         )
 
-        # PIVOT 1: When OTP terms are present and we still don't have a phone number,
-        # prefer asking for an official helpline (yields phoneNumbers) instead of looping ALT_VERIFICATION.
+        # If we already have at least one intel category (phone or link),
+        # prefer asking for a ticket/reference to avoid ALT_VERIFICATION loops.
+        got_phone = bool(intel_dict.get("phoneNumbers"))
+        got_link = bool(intel_dict.get("phishingLinks"))
+        if (got_phone or got_link) and intent in (INT_ASK_ALT_VERIFICATION, INT_ACK_CONCERN):
+            intent = INT_ASK_TICKET_REF
+            reason = "progress_ticket_ref"
+
+        # OTP present & phone missing → bias helpline (already present elsewhere, retain)
         if otp_in_latest and not intel_dict.get("phoneNumbers"):
             intent = INT_ASK_OFFICIAL_HELPLINE
             reason = "otp_bias_helpline"
@@ -264,7 +285,7 @@ def choose_next_action(
     # ------------------------------------------------------------
     # Repetition Breaker + Escalation
     # ------------------------------------------------------------
-
+    recent = session.bf_recent_intents[-_RECENT_WINDOW:]
     if intent == session.bf_last_intent:
         session.bf_repeat_count += 1
     else:
@@ -288,10 +309,10 @@ def choose_next_action(
         reason = "repetition_escalation"
 
     # ------------------------------------------------------------
-    # PIVOT 2: Cooldown for ALT_VERIFICATION to avoid repeated loops
+    # PIVOT 2a: Cooldown for ALT_VERIFICATION to avoid repeated loops
     # If ALT_VERIFICATION was chosen very recently (last 2 intents), pivot once.
     # ------------------------------------------------------------
-    if intent == INT_ASK_ALT_VERIFICATION and intent in session.bf_recent_intents[-2:]:
+    if intent == INT_ASK_ALT_VERIFICATION and intent in session.bf_recent_intents[-_ALT_COOLDOWN_WINDOW:]:
         intent = _pivot_intent(
             intel_dict,
             session.bf_recent_intents,
@@ -299,6 +320,18 @@ def choose_next_action(
             session.scam_type,
         )
         reason = "alt_verification_cooldown"
+
+    # PIVOT 2b: ACK repetition guard — if ACK dominated the recent window, pivot to a productive intent
+    if intent in _ACK_SET and sum(1 for x in recent if x in _ACK_SET) >= 2:
+        intent = _pivot_intent(
+            intel_dict,
+            session.bf_recent_intents,
+            intent,
+            session.scam_type,
+        )
+        if intent == INT_ASK_ALT_VERIFICATION and (intel_dict.get("phoneNumbers") or intel_dict.get("phishingLinks")):
+            intent = INT_ASK_TICKET_REF
+        reason = "ack_repetition_breaker"
 
     # ------------------------------------------------------------
 

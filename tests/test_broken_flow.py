@@ -36,10 +36,10 @@ def test_registry_driven_intent_selection(session, settings):
     action = choose_next_action(session, "hello", intel_dict, {}, settings)
     assert action["intent"] == INT_ASK_OFFICIAL_WEBSITE
     
-    # Now add Link, should pick UPI (prio 15)
+    # Now add Link, should pick Ticket/Ref (progress_ticket_ref pivot) instead of UPI (prio 15)
     intel_dict["phishingLinks"] = ["http://scam.com"]
     action = choose_next_action(session, "hello", intel_dict, {}, settings)
-    assert action["intent"] == INT_ASK_ALT_VERIFICATION
+    assert action["intent"] == INT_ASK_TICKET_REF
 
     # Now add UPI, should pick Phone (prio 10)
     intel_dict["upiIds"] = ["scam@upi"]
