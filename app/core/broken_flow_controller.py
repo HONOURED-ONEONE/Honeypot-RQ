@@ -28,10 +28,18 @@ ARTIFACT_INTENT_MAP = {
     "bankAccounts": INT_CHANNEL_FAIL,
 }
 
-# Light helpers for repetition control
+# Repetition control / progression helpers
 _ACK_SET = {INT_ACK_CONCERN}
-_RECENT_WINDOW = 3  # small sliding window to judge recent intent patterns
+_RECENT_WINDOW = 3
 _ALT_COOLDOWN_WINDOW = 2
+
+def _ioc_category_count_from_dict(intel_dict: Dict[str, Any]) -> int:
+    count = 0
+    for k in artifact_registry.artifacts.keys():
+        if intel_dict.get(k):
+            if isinstance(intel_dict.get(k), list) and len(intel_dict.get(k)) > 0:
+                count += 1
+    return count
 
 def compute_ioc_signature(intel_dict: Dict[str, Any]) -> str:
     data = {}
@@ -150,6 +158,7 @@ def choose_next_action(
     session.bf_recent_intents = getattr(session, "bf_recent_intents", [])
     session.bf_last_ioc_signature = getattr(session, "bf_last_ioc_signature", None)
     session.scam_type = getattr(session, "scam_type", "UNKNOWN")
+    recent = session.bf_recent_intents[-_RECENT_WINDOW:]
 
     # ------------------------------------------------------------
     # PIVOT 0: Early boundary refusal if OTP/PIN appears and we haven't refused once.
@@ -249,18 +258,35 @@ def choose_next_action(
             session.scam_type,
         )
 
-        # If we already have at least one intel category (phone or link),
-        # prefer asking for a ticket/reference to avoid ALT_VERIFICATION loops.
+        # Progression once some intel exists
         got_phone = bool(intel_dict.get("phoneNumbers"))
-        got_link = bool(intel_dict.get("phishingLinks"))
-        if (got_phone or got_link) and intent in (INT_ASK_ALT_VERIFICATION, INT_ACK_CONCERN):
-            intent = INT_ASK_TICKET_REF
-            reason = "progress_ticket_ref"
+        got_link  = bool(intel_dict.get("phishingLinks"))
+        asked_ticket_recently = INT_ASK_TICKET_REF in recent
+        asked_dept_recently   = INT_ASK_DEPARTMENT_BRANCH in recent
 
-        # OTP present & phone missing → bias helpline (already present elsewhere, retain)
-        if otp_in_latest and not intel_dict.get("phoneNumbers"):
+        # Prefer ticket after phone/link; then department after ticket
+        if (got_phone or got_link):
+            if not asked_ticket_recently and intent in (INT_ASK_ALT_VERIFICATION, INT_ACK_CONCERN, INT_ASK_OFFICIAL_WEBSITE):
+                intent = INT_ASK_TICKET_REF
+                reason = "progress_ticket_ref"
+            elif asked_ticket_recently and not asked_dept_recently and intent in (INT_ASK_ALT_VERIFICATION, INT_ACK_CONCERN):
+                intent = INT_ASK_DEPARTMENT_BRANCH
+                reason = "progress_department"
+
+        # Keep existing OTP → HELPLINE bias when phone missing
+        if otp_in_latest and not got_phone:
             intent = INT_ASK_OFFICIAL_HELPLINE
             reason = "otp_bias_helpline"
+
+        # If milestone reached (by registry view) and scamDetected is True, request close now
+        try:
+            ioc_cnt = _ioc_category_count_from_dict(intel_dict)
+            if ioc_cnt >= default_settings.FINALIZE_MIN_IOC_CATEGORIES and getattr(session, "scamDetected", False):
+                intent = INT_CLOSE_AND_VERIFY_SELF
+                force_finalize = True
+                reason = "ioc_milestone_ready"
+        except Exception:
+            pass
     elif session.bf_state == BF_S5:
         intent = INT_CLOSE_AND_VERIFY_SELF
         force_finalize = True
@@ -285,7 +311,6 @@ def choose_next_action(
     # ------------------------------------------------------------
     # Repetition Breaker + Escalation
     # ------------------------------------------------------------
-    recent = session.bf_recent_intents[-_RECENT_WINDOW:]
     if intent == session.bf_last_intent:
         session.bf_repeat_count += 1
     else:
@@ -321,7 +346,7 @@ def choose_next_action(
         )
         reason = "alt_verification_cooldown"
 
-    # PIVOT 2b: ACK repetition guard — if ACK dominated the recent window, pivot to a productive intent
+    # PIVOT 2b: ACK repetition guard — if ACK dominates recent window, pivot away
     if intent in _ACK_SET and sum(1 for x in recent if x in _ACK_SET) >= 2:
         intent = _pivot_intent(
             intel_dict,
@@ -329,7 +354,8 @@ def choose_next_action(
             intent,
             session.scam_type,
         )
-        if intent == INT_ASK_ALT_VERIFICATION and (intel_dict.get("phoneNumbers") or intel_dict.get("phishingLinks")):
+        # If we already have phone or link, bias to ticket_ref to avoid going back to ALT
+        if (intel_dict.get("phoneNumbers") or intel_dict.get("phishingLinks")) and intent == INT_ASK_ALT_VERIFICATION:
             intent = INT_ASK_TICKET_REF
         reason = "ack_repetition_breaker"
 
