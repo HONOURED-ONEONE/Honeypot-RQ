@@ -29,6 +29,20 @@ ARTIFACT_INTENT_MAP = {
 }
 
 # Repetition control / progression helpers
+# Allowed intents that directly support artifact progress or safe control surfaces
+_ALLOWED_INTENTS = {
+    INT_REFUSE_SENSITIVE_ONCE,        # one-time boundary
+    INT_ASK_OFFICIAL_HELPLINE,        # phoneNumbers
+    INT_ASK_OFFICIAL_WEBSITE,         # phishingLinks
+    INT_ASK_ALT_VERIFICATION,         # can bait upiIds/links; use with cooldowns
+    INT_CHANNEL_FAIL,                 # controlled failure; often baits links/alternatives
+    INT_SECONDARY_FAIL,               # non-terminal stuck surface
+    INT_CLOSE_AND_VERIFY_SELF,        # finalization
+    INT_ACK_CONCERN,                  # minimal filler (guarded by anti-loop)
+    INT_ASK_TICKET_REF,               # progression
+    INT_ASK_DEPARTMENT_BRANCH,        # progression
+}
+
 _ACK_SET = {INT_ACK_CONCERN}
 _RECENT_WINDOW = 3
 _ALT_COOLDOWN_WINDOW = 2
@@ -145,6 +159,13 @@ def choose_next_action(
     if settings is None or isinstance(settings, dict):
         settings = default_settings
 
+    def _constrain(intent: str) -> str:
+        # If a non-allowed intent is produced, pivot to a productive one
+        if intent not in _ALLOWED_INTENTS:
+            # choose a missing-intel intent based on registry
+            return _pick_missing_intel_intent(intel_dict, session.bf_recent_intents, session.scam_type)
+        return intent
+
     # ------------------------------------------------------------
     # Session defaults
     # ------------------------------------------------------------
@@ -169,10 +190,12 @@ def choose_next_action(
     if otp_in_latest and not session.bf_policy_refused_once:
         intent = INT_REFUSE_SENSITIVE_ONCE
         session.bf_policy_refused_once = True
+        intent = _constrain(intent)
         session.bf_last_intent = intent
         session.bf_recent_intents.append(intent)
         if len(session.bf_recent_intents) > 10:
             session.bf_recent_intents.pop(0)
+        # Early return to enforce boundary once
         return {
             "bf_state": session.bf_state,
             "intent": intent,
@@ -273,20 +296,22 @@ def choose_next_action(
                 intent = INT_ASK_DEPARTMENT_BRANCH
                 reason = "progress_department"
 
-        # Keep existing OTP → HELPLINE bias when phone missing
-        if otp_in_latest and not got_phone:
-            intent = INT_ASK_OFFICIAL_HELPLINE
-            reason = "otp_bias_helpline"
-
-        # If milestone reached (by registry view) and scamDetected is True, request close now
+        # Milestone finalize: if IOC categories meet threshold and scamDetected is true, request close now.
         try:
             ioc_cnt = _ioc_category_count_from_dict(intel_dict)
-            if ioc_cnt >= default_settings.FINALIZE_MIN_IOC_CATEGORIES and getattr(session, "scamDetected", False):
+            if ioc_cnt >= settings.FINALIZE_MIN_IOC_CATEGORIES and getattr(session, "scamDetected", False):
                 intent = INT_CLOSE_AND_VERIFY_SELF
                 force_finalize = True
                 reason = "ioc_milestone_ready"
         except Exception:
             pass
+
+        intent = _constrain(intent)
+
+        # Keep existing OTP → HELPLINE bias when phone missing
+        if otp_in_latest and not got_phone:
+            intent = INT_ASK_OFFICIAL_HELPLINE
+            reason = "otp_bias_helpline"
     elif session.bf_state == BF_S5:
         intent = INT_CLOSE_AND_VERIFY_SELF
         force_finalize = True
@@ -345,6 +370,7 @@ def choose_next_action(
             session.scam_type,
         )
         reason = "alt_verification_cooldown"
+        intent = _constrain(intent)
 
     # PIVOT 2b: ACK repetition guard — if ACK dominates recent window, pivot away
     if intent in _ACK_SET and sum(1 for x in recent if x in _ACK_SET) >= 2:
@@ -354,10 +380,8 @@ def choose_next_action(
             intent,
             session.scam_type,
         )
-        # If we already have phone or link, bias to ticket_ref to avoid going back to ALT
-        if (intel_dict.get("phoneNumbers") or intel_dict.get("phishingLinks")) and intent == INT_ASK_ALT_VERIFICATION:
-            intent = INT_ASK_TICKET_REF
         reason = "ack_repetition_breaker"
+        intent = _constrain(intent)
 
     # ------------------------------------------------------------
 
