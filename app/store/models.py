@@ -7,6 +7,8 @@ class Intelligence:
     upiIds: List[str] = field(default_factory=list)
     phishingLinks: List[str] = field(default_factory=list)
     phoneNumbers: List[str] = field(default_factory=list)
+    # ✅ P0.2: Required by callback payload and evaluation docs
+    suspiciousKeywords: List[str] = field(default_factory=list)
 
 @dataclass
 class SessionState:
@@ -53,14 +55,11 @@ class SessionState:
         """
         if self.turnIndex is None:
             self.turnIndex = 0
-
         # If loaded session had totalMessagesExchanged but not turnIndex, use it.
         if self.turnIndex == 0 and self.totalMessagesExchanged:
             self.turnIndex = int(self.totalMessagesExchanged)
-
         # Last-resort: infer from conversation length if both are missing/zero.
         if self.turnIndex == 0 and self.conversation:
             self.turnIndex = len(self.conversation)
-
         # Sync the legacy field to canonical field
         self.totalMessagesExchanged = int(self.turnIndex)

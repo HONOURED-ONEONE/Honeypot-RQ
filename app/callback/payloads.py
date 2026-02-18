@@ -12,7 +12,7 @@ def build_final_payload(session: SessionState) -> dict:
             "upiIds": intel.upiIds,
             "phishingLinks": intel.phishingLinks,
             "phoneNumbers": intel.phoneNumbers,
-            "suspiciousKeywords": intel.suspiciousKeywords,
+            "suspiciousKeywords": getattr(intel, "suspiciousKeywords", []),
         },
         "agentNotes": session.agentNotes or "Scammer used social engineering cues.",
     }

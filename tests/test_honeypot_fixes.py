@@ -48,13 +48,13 @@ def test_controller_gating_and_priority():
     session.extractedIntelligence.phishingLinks = intel_dict["phishingLinks"]
     session.bf_state = BF_S5 # Try to close
     
-    # Should be gated because only 1 IOC category (link) is present, and settings.FINALIZE_MIN_IOC_CATEGORIES=3
+    # Should be gated because only 1 IOC category (link) is present, and settings.FINALIZE_MIN_IOC_CATEGORIES=2
     action = choose_next_action(session, "hello", intel_dict, {}, settings)
     
     assert action["intent"] != INT_CLOSE_AND_VERIFY_SELF
     assert action["reason"] == "close_gated_pivot"
-    # Registry priority: Phone (10) is missing. Link (20) is present.
-    assert action["intent"] == INT_ASK_OFFICIAL_HELPLINE
+    # Registry priority: UPI (15) is missing. Link (20) is present.
+    assert action["intent"] == INT_ASK_ALT_VERIFICATION
 
 def test_controller_repetition_pivot():
     session = SessionState(sessionId="test_rep")
@@ -67,9 +67,9 @@ def test_controller_repetition_pivot():
     
     action = choose_next_action(session, "hello", intel_dict, {}, settings)
     assert action["intent"] != INT_ASK_OFFICIAL_WEBSITE
-    assert action["reason"] == "repetition_pivot"
-    # Should pivot to Phone (next best)
-    assert action["intent"] == INT_ASK_OFFICIAL_HELPLINE
+    assert action["reason"] == "repetition_escalation"
+    # Should pivot to UPI (next best)
+    assert action["intent"] == INT_ASK_ALT_VERIFICATION
 
 def test_finalization_logic():
     session = SessionState(sessionId="test_fin")
@@ -84,12 +84,17 @@ def test_finalization_logic():
     
     # 2 categories
     session.extractedIntelligence.phishingLinks = ["https://scam.link"]
-    # settings.FINALIZE_MIN_IOC_CATEGORIES is 3 by default
-    assert should_finalize(session) is None
-    
-    # 3 categories
-    session.extractedIntelligence.upiIds = ["scam@upi"]
+    # ✅ P1.3: settings.FINALIZE_MIN_IOC_CATEGORIES is now 2 by default
     assert should_finalize(session) == "ioc_milestone"
+
+def test_finalization_max_turns():
+    session = SessionState(sessionId="test_max_turns")
+    # ✅ P1.3: Default BF_MAX_TURNS is 10
+    session.turnIndex = 10
+    assert should_finalize(session) == "max_turns_reached"
+    
+    session.turnIndex = 5
+    assert should_finalize(session) is None
 
 def test_guardrail_non_registered_dropped():
     from app.intel.artifact_registry import artifact_registry
