@@ -42,13 +42,19 @@ def _extract_json(text: str) -> Dict[str, Any]:
 
 
 # High-signal regexes (for fallback + borderline confirmation)
-# ✅ P1.2e: Replace corrupted control characters with proper word boundaries and robust patterns
+# ✅ P1.2e v2: Clean, single-line patterns (no embedded newlines)
 OTP_TERMS = re.compile(r"\b(otp|pin|password)\b", re.I)
 PAY_TERMS = re.compile(r"\b(upi|pay|payment|transfer|send money|fee|charges)\b", re.I)
 # Include generic URLs and common shorteners
-LINK_TERMS = re.compile(r"(https?://\S+|www\.\S+|bit\.ly/\S+|tinyurl\.com/\S+|t\.co/\S+)", re.I)
+LINK_TERMS = re.compile(
+    r"(https?://\S+|www\.\S+|bit\.ly/\S+|tinyurl\.com/\S+|t\.co/\S+)",
+    re.I,
+)
 KYC_TERMS = re.compile(r"\b(kyc|verify|verification|login|update)\b", re.I)
-THREAT_TERMS = re.compile(r"\b(block|blocked|suspend|suspended|freeze|locked|fine|penalty)\b", re.I)
+THREAT_TERMS = re.compile(
+    r"\b(block|blocked|suspend|suspended|freeze|locked|fine|penalty)\b",
+    re.I,
+)
 IMPERSONATION_TERMS = re.compile(
     r"\b("
     r"bank|sbi|hdfc|icici|rbi|"
