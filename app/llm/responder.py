@@ -138,7 +138,7 @@ INTENT_TEMPLATES: Dict[str, List[str]] = {
 
 FORBIDDEN_TERMS = [
     "open sms", "sms inbox", "notifications", "copy otp",
-    "enter otp", "tap confirm", "share otp", "send pin",
+    "enter otp", "tap confirm", "6-digit code", "share otp",
 ]
 
 IDENTIFIER_PATTERNS = {

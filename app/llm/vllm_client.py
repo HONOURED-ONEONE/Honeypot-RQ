@@ -8,7 +8,17 @@ VLLM_BASE_URL = os.getenv("VLLM_BASE_URL", "").rstrip("/")
 VLLM_API_KEY = os.getenv("VLLM_API_KEY", "")
 VLLM_MODEL = os.getenv("VLLM_MODEL", "Qwen/Qwen2.5-14B-Instruct-AWQ")
 
-_client = httpx.Client(timeout=90)
+# ✅ P1.4: Evaluation requires response < 30s end-to-end.
+# Add strict per-request timeout + overall client budget with limited retries.
+# Defaults are hackathon-friendly; override via env if needed.
+#   VLLM_REQUEST_TIMEOUT_SEC: per HTTP request timeout (default 8s)
+#   VLLM_CLIENT_BUDGET_SEC : total time budget across retries (default 24s)
+#   VLLM_MAX_RETRIES       : max retry attempts (default 2)
+REQUEST_TIMEOUT_SEC = float(os.getenv("VLLM_REQUEST_TIMEOUT_SEC", "8.0"))
+CLIENT_BUDGET_SEC  = float(os.getenv("VLLM_CLIENT_BUDGET_SEC", "24.0"))
+MAX_RETRIES        = int(os.getenv("VLLM_MAX_RETRIES", "2"))
+
+_client = httpx.Client(timeout=REQUEST_TIMEOUT_SEC)
 
 
 def _headers() -> dict:
@@ -36,16 +46,31 @@ def chat_completion(system: str, user: str, *, temperature: float = 0.4, max_tok
         "temperature": float(temperature),
         "max_tokens": int(max_tokens),
     }
-
+    start = time.time()
+    attempt = 0
     last_err = None
-    for attempt in range(3):
+    # ✅ P1.4: keep total attempts within a strict wall-clock budget
+    while (time.time() - start) < CLIENT_BUDGET_SEC and attempt < max(1, MAX_RETRIES):
+        attempt += 1
         try:
             resp = _client.post(url, headers=_headers(), json=payload)
             resp.raise_for_status()
             data = resp.json()
             return data["choices"][0]["message"]["content"]
-        except Exception as e:
+        except (httpx.ReadTimeout, httpx.ConnectTimeout, httpx.TimeoutException) as e:
             last_err = e
-            time.sleep(0.4 + random.uniform(0.0, 0.2))
-
-    raise RuntimeError(f"vLLM call failed: {last_err}")
+            # Backoff, but do not exceed remaining budget
+            remaining = CLIENT_BUDGET_SEC - (time.time() - start)
+            if remaining <= 0:
+                break
+            time.sleep(min(0.2 + random.uniform(0.0, 0.1), max(0.0, remaining)))
+        except Exception as e:
+            # Non-timeout errors: keep one retry if budget allows, else fail fast
+            last_err = e
+            remaining = CLIENT_BUDGET_SEC - (time.time() - start)
+            if remaining <= 0 or attempt >= MAX_RETRIES:
+                break
+            time.sleep(min(0.2 + random.uniform(0.0, 0.1), max(0.0, remaining)))
+    # Propagate as a single, budget-aware error; callers (detector/responder) already have safe fallbacks.
+    elapsed = round(time.time() - start, 3)
+    raise RuntimeError(f"vLLM call failed (attempts={attempt}, elapsed={elapsed}s): {last_err}")

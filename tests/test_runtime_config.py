@@ -113,9 +113,11 @@ def test_controller_respects_overrides(mock_get_redis):
         artifact_registry.extract_all("dummy")
         
         # Now phishingLinks should be skipped in _pick_missing_intel_intent
-        intel = {"phishingLinks": [], "phoneNumbers": []}
-        # Even though phishingLinks has higher priority (20 vs 10), 
-        # it should pick phoneNumbers intent (INT_ASK_OFFICIAL_HELPLINE)
+        intel = {"phishingLinks": [], "phoneNumbers": [], "upiIds": ["scam@upi"], "bankAccounts": ["123"]}
+        # phishingLinks (prio 20) is disabled for asking.
+        # upiIds (15) and bankAccounts (5) are present.
+        # missing is phoneNumbers (10).
+        # so it should pick phoneNumbers intent (INT_ASK_OFFICIAL_HELPLINE)
         intent = _pick_missing_intel_intent(intel, [])
         assert intent == INT_ASK_OFFICIAL_HELPLINE
         

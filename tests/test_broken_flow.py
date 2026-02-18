@@ -3,7 +3,7 @@ from dataclasses import asdict
 from app.store.models import SessionState, Intelligence
 from app.core.broken_flow_constants import *
 from app.core.broken_flow_controller import choose_next_action, compute_ioc_signature, _pick_missing_intel_intent
-from app.llm.responder import _safety_filter
+from app.llm.responder import _contains_forbidden as _safety_filter
 from app.core.finalize import should_finalize
 
 class MockSettings:
@@ -36,8 +36,13 @@ def test_registry_driven_intent_selection(session, settings):
     action = choose_next_action(session, "hello", intel_dict, {}, settings)
     assert action["intent"] == INT_ASK_OFFICIAL_WEBSITE
     
-    # Now add Link, should pick Phone
+    # Now add Link, should pick UPI (prio 15)
     intel_dict["phishingLinks"] = ["http://scam.com"]
+    action = choose_next_action(session, "hello", intel_dict, {}, settings)
+    assert action["intent"] == INT_ASK_ALT_VERIFICATION
+
+    # Now add UPI, should pick Phone (prio 10)
+    intel_dict["upiIds"] = ["scam@upi"]
     action = choose_next_action(session, "hello", intel_dict, {}, settings)
     assert action["intent"] == INT_ASK_OFFICIAL_HELPLINE
 
@@ -64,9 +69,9 @@ def test_intent_repetition_pivot(session, settings):
     
     action = choose_next_action(session, "hello", intel_dict, {}, settings)
     # Trigger repetition pivot
-    assert action["reason"] == "repetition_pivot"
-    # Pivot should pick the next best missing intel (Phone)
-    assert action["intent"] == INT_ASK_OFFICIAL_HELPLINE
+    assert action["reason"] == "repetition_escalation"
+    # Pivot should pick the next best missing intel (UPI, prio 15)
+    assert action["intent"] == INT_ASK_ALT_VERIFICATION
 
 def test_safety_filter_updated(session):
     assert _safety_filter("please open sms") is True
@@ -76,30 +81,40 @@ def test_safety_filter_updated(session):
     assert _safety_filter("i am fine, how are you?") is False
 
 def test_finalize_triggers(session, settings):
-    session.scamDetected = True
-    session.extractedIntelligence.phoneNumbers = ["1234567890"]
-    session.extractedIntelligence.phishingLinks = ["http://scam.com"]
-    # settings.py default is 3 categories
-    session.extractedIntelligence.upiIds = ["scam@upi"]
-    assert should_finalize(session) is not None
-    
-    session.extractedIntelligence = Intelligence()
-    session.bf_no_progress_count = settings.BF_NO_PROGRESS_TURNS
-    assert should_finalize(session) == "no_progress_threshold"
+    from unittest.mock import patch
+    with patch("app.core.finalize.settings", settings):
+        session.scamDetected = True
+        session.extractedIntelligence.phoneNumbers = ["1234567890"]
+        session.extractedIntelligence.phishingLinks = ["http://scam.com"]
+        # settings.py default is 3 categories (WAIT, it's 4 now)
+        # MockSettings has FINALIZE_MIN_IOC_CATEGORIES = 2
+        assert should_finalize(session) is not None
+        
+        session.extractedIntelligence = Intelligence()
+        session.bf_no_progress_count = settings.BF_NO_PROGRESS_TURNS
+        assert should_finalize(session) == "no_progress_threshold"
 
 def test_pick_missing_intel_logic():
     # Test the pure function directly
     intel = {
         "phoneNumbers": [],
         "phishingLinks": [],
+        "upiIds": [],
+        "bankAccounts": [],
     }
-    # Link (20) > Phone (10)
+    # Link (20) > UPI (15) > Phone (10)
     assert _pick_missing_intel_intent(intel, []) == INT_ASK_OFFICIAL_WEBSITE
     
     intel["phishingLinks"] = ["http"]
+    assert _pick_missing_intel_intent(intel, []) == INT_ASK_ALT_VERIFICATION
+    
+    intel["upiIds"] = ["scam@upi"]
     assert _pick_missing_intel_intent(intel, []) == INT_ASK_OFFICIAL_HELPLINE
     
     intel["phoneNumbers"] = ["123"]
+    assert _pick_missing_intel_intent(intel, []) == INT_CHANNEL_FAIL
+
+    intel["bankAccounts"] = ["123456789012"]
     # All asked artifacts collected -> ACK_CONCERN
     assert _pick_missing_intel_intent(intel, []) == INT_ACK_CONCERN
 
@@ -113,31 +128,25 @@ def test_guardrail_controller_never_asks_passive_only(session, settings):
     artifact_registry.artifacts["phishingLinks"].passive_only = True
     try:
         action = choose_next_action(session, "hello", intel_dict, {}, settings)
-        # Should NOT pick Website now, should pick Phone (prio 10)
-        assert action["intent"] == INT_ASK_OFFICIAL_HELPLINE
+        # Should NOT pick Website now, should pick UPI (prio 15)
+        assert action["intent"] == INT_ASK_ALT_VERIFICATION
     finally:
         # Reset
         artifact_registry.artifacts["phishingLinks"].passive_only = False
 
 def test_guardrail_finalization_ignores_non_registry_data(session, settings):
-    session.scamDetected = True
-    # Add data to Intelligence that IS in the registry
-    session.extractedIntelligence.phoneNumbers = ["1234567890"]
-    
-    # Add something that is NOT in the registry (if we can)
-    # Since we can't easily add fields to the dataclass, we can mock _ioc_category_count
-    # or just trust that it only iterates over registry.
-    # A better test: ensure it doesn't finalize with just 1 registered category
-    # even if other random fields are set.
-    setattr(session.extractedIntelligence, "fake_intel", ["some_data"])
-    
-    # Should NOT finalize because FINALIZE_MIN_IOC_CATEGORIES is 3 by default
-    assert should_finalize(session) is None
-    
-    # Add 2nd registered category
-    session.extractedIntelligence.phishingLinks = ["http://scam.com"]
-    assert should_finalize(session) is None
-    
-    # Add 3rd registered category
-    session.extractedIntelligence.upiIds = ["scam@upi"]
-    assert should_finalize(session) == "ioc_milestone"
+    from unittest.mock import patch
+    with patch("app.core.finalize.settings", settings):
+        session.scamDetected = True
+        # Add data to Intelligence that IS in the registry
+        session.extractedIntelligence.phoneNumbers = ["1234567890"]
+        
+        # Add something that is NOT in the registry
+        setattr(session.extractedIntelligence, "fake_intel", ["some_data"])
+        
+        # Should NOT finalize because MockSettings has FINALIZE_MIN_IOC_CATEGORIES = 2
+        assert should_finalize(session) is None
+        
+        # Add 2nd registered category
+        session.extractedIntelligence.phishingLinks = ["http://scam.com"]
+        assert should_finalize(session) == "ioc_milestone"

@@ -1,8 +1,10 @@
 import json
 import time
 import inspect
+from dataclasses import fields as dc_fields
 from app.store.redis_conn import get_redis
 from app.store.models import SessionState, Intelligence
+from app.observability.logging import log  # ✅ P1.2d: migration observability
 
 PREFIX = "session:"
 
@@ -11,6 +13,63 @@ def _migrate_session_data(data: dict) -> dict:
     Backward-compat migration for stored sessions.
     Ensures `turnIndex` exists and is an int, and keeps `totalMessagesExchanged` synced.
     """
+    # ✅ P1.2d: Accumulators for structured migration logging
+    did_backfill_scam_type = False
+    did_drop_legacy_scam_type = False
+    removed_top_fields = 0
+    removed_intel_fields = 0
+
+    # ✅ P1.2: Harmonize scam type fields from legacy records
+    # - Canonical field is 'scamType' (persisted in SessionState)
+    # - Older sessions may have stored only 'scam_type' (alias used by controller)
+    #   In that case, backfill 'scamType' so downstream logic has a consistent value.
+    if "scamType" not in data or data.get("scamType") is None:
+        alias_val = data.get("scam_type")
+        if alias_val is not None:
+            data["scamType"] = alias_val
+            did_backfill_scam_type = True
+
+    # ✅ P1.2b: Drop legacy alias fields after backfill to keep schema clean.
+    # Only remove keys that are not part of SessionState to avoid leaking unknowns.
+    # ('scam_type' is not a declared dataclass field in SessionState.)
+    if "scam_type" in data:
+        try:
+            del data["scam_type"]
+            did_drop_legacy_scam_type = True
+        except Exception:
+            # Defensive: ignore if deletion fails for any reason
+            pass
+
+    # ✅ P1.2c: Purge any other undeclared legacy fields (top-level and nested intelligence)
+    # 1) Top-level allowlist: only keep fields that are defined on SessionState
+    try:
+        allowed_top = {f.name for f in dc_fields(SessionState)}
+        for k in list(data.keys()):
+            if k not in allowed_top:
+                # Keep only canonical fields to avoid persisting stale debug/legacy keys
+                try:
+                    del data[k]
+                    removed_top_fields += 1
+                except Exception:
+                    pass
+    except Exception:
+        # Do not fail migration if dataclass inspection fails
+        pass
+
+    # 2) Nested allowlist for extractedIntelligence (dict form prior to rehydration)
+    try:
+        ei = data.get("extractedIntelligence")
+        if isinstance(ei, dict):
+            allowed_ei = {f.name for f in dc_fields(Intelligence)}
+            for k in list(ei.keys()):
+                if k not in allowed_ei:
+                    try:
+                        del ei[k]
+                        removed_intel_fields += 1
+                    except Exception:
+                        pass
+    except Exception:
+        pass
     # If stored sessions used only totalMessagesExchanged, backfill turnIndex
     if "turnIndex" not in data or data.get("turnIndex") is None:
         legacy = data.get("totalMessagesExchanged") or 0
@@ -21,6 +80,21 @@ def _migrate_session_data(data: dict) -> dict:
     # Sync legacy field too
     data["totalMessagesExchanged"] = int(data.get("turnIndex") or 0)
 
+    # ✅ P1.2d: Emit a compact migration log line for observability
+    # (Non-influential: wrapped in try to avoid impacting load path)
+    try:
+        log(
+            event="session_migrated",
+            scamType=data.get("scamType") or "",
+            backfilledScamType=bool(did_backfill_scam_type),
+            droppedLegacyScamType=bool(did_drop_legacy_scam_type),
+            removedTopFields=int(removed_top_fields),
+            removedIntelFields=int(removed_intel_fields),
+            turnIndex=int(data.get("turnIndex") or 0),
+            totalMessagesExchanged=int(data.get("totalMessagesExchanged") or 0),
+        )
+    except Exception:
+        pass
     return data
 
 def _key(session_id: str) -> str:
@@ -73,15 +147,15 @@ def load_session(session_id: str) -> SessionState:
 
     data = json.loads(raw)
 
+    # ✅ Migration step (permanent fix for old sessions)
+    data = _migrate_session_data(data)
+
     # Rehydrate intelligence
     intel = Intelligence(**data.get("extractedIntelligence", {}))
     data["extractedIntelligence"] = intel
 
     # Rehydrate sets
     data = _rehydrate_sets(data)
-
-    # ✅ Migration step (permanent fix for old sessions)
-    data = _migrate_session_data(data)
 
     # Drop unknown fields
     data = _filter_session_kwargs(data)
