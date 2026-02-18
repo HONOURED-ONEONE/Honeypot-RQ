@@ -38,6 +38,13 @@ INTENTS_ALLOW_3_SENTENCES = {
     INT_SECONDARY_FAIL,
 }
 
+# Only allow LLM rephrase on intents that are least prone to instruction creep
+# (Keep rephrase off for ASK_* intents; they are more vulnerable to "how-to" expansions.)
+SAFE_FOR_REPHRASE = {
+    INT_ACK_CONCERN,
+    INT_REFUSE_SENSITIVE_ONCE,
+}
+
 # ---------------------------------------------------------------------------
 # Templates (intent-driven only; no tactics, no procedures)
 # Each template is a list of candidate strings.
@@ -143,10 +150,25 @@ FORBIDDEN_TERMS = [
 
 IDENTIFIER_PATTERNS = {
     "phone": re.compile(r"\+?\d{10,}", re.I),
-    "url": re.compile(r"https?://\S+", re.I),
+    # Accept http(s)://... OR www....
+    "url": re.compile(r"(?:https?://\S+|www\.\S+)", re.I),
     "bank": re.compile(r"\b\d{12,16}\b"),
     "upi": re.compile(r"\b[\w.\-]+@[\w\-]+\b", re.I),
 }
+
+#
+# Procedural-language guard: block step-by-step/instructional phrasing
+#
+PROCEDURAL_PATTERNS = [
+    r"\b(step|steps|follow these|do the following)\b",
+    r"(?m)^\s*\d+\.",            # numbered list lines
+    r"(?m)^\s*[-*•]\s+",         # bullets
+    r"\b(click|open|go to|log ?in|enter|submit|navigate|install|download)\b",
+]
+
+def _looks_procedural(s: str) -> bool:
+    t = (s or "").lower()
+    return any(re.search(p, t, re.I) for p in PROCEDURAL_PATTERNS)
 
 def _contains_forbidden(text: str) -> bool:
     t = (text or "").lower()
@@ -204,34 +226,42 @@ def generate_agent_reply(req, session, intent: str) -> str:
     if _count_questions(reply) > 1:
         reply = _safe_fallback(intent)
 
-    # Template-only mode (default)
-    if not getattr(settings, "BF_LLM_REPHRASE", False):
-        if _contains_forbidden(reply):
-            return _safe_fallback(intent)
-        if _introduces_new_identifier(reply, session):
-            return _safe_fallback(intent)
+    # Always run minimal safety on the template reply
+    if _contains_forbidden(reply) or _introduces_new_identifier(reply, session):
+        reply = _safe_fallback(intent)
+        # Fall through; we still may return reply if rephrase is disabled.
+
+    # Gate LLM rephrase: allow only when enabled AND intent is safe to rephrase
+    if (not getattr(settings, "BF_LLM_REPHRASE", False)) or (intent not in SAFE_FOR_REPHRASE):
         return reply
 
     # Optional LLM rephrase (strictly bounded)
     try:
-        out = chat_completion(
-            "You are a cautious customer verifying an account issue.",
-            reply,
-            temperature=0.6,
-            max_tokens=90,
+        # Stricter system rules (non-negotiables) to prevent procedure/coaching
+        agent_rules = (
+            "You generate short, cautious replies for verification.\n"
+            "NON-NEGOTIABLES:\n"
+            "- Follow the given intent strictly (no new goals).\n"
+            "- NO procedures, steps, or instructions.\n"
+            "- At most ONE question.\n"
+            "- Do NOT invent or mention any identifiers.\n"
+            "- Keep it concise (max 2–3 sentences based on intent).\n"
+            "- Do NOT imply resolution or closure unless told.\n"
         )
+        out = chat_completion(agent_rules, reply, temperature=0.2, max_tokens=70)
         out = (out or "").strip()
+        # Strip list markers to reduce accidental procedural formats before limit
+        out = re.sub(r"(?m)^\s*(?:\d+\.|[-*•])\s+", "", out)
         out = _limit_sentences(out, max_sentences)
-
-        if (
-            not out
+        if (not out
             or _contains_forbidden(out)
             or _count_questions(out) > 1
             or _introduces_new_identifier(out, session)
+            or _looks_procedural(out)
         ):
             raise ValueError("unsafe_rephrase")
-
         return out
     except Exception:
         log(event="responder_fallback", intent=intent)
-        return _safe_fallback(intent)
+        # On failure, return the safe template (already screened above)
+        return reply
