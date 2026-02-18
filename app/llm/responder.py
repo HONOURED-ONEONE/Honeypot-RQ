@@ -5,7 +5,7 @@ Responder Invariants (Phase-3)
 
 - The responder NEVER decides what to ask; it only formats the selected intent.
 - All content is intent-driven and registry-compliant.
-- No procedural guidance.
+- No procedural guidance (no steps, no navigation).
 - No fabricated identifiers.
 - At most ONE question per reply.
 - No early closing unless finalize is true (enforced upstream).
@@ -14,7 +14,7 @@ Responder Invariants (Phase-3)
 import random
 import re
 import logging
-from typing import List, Dict
+from typing import List, Dict, Optional
 
 from app.settings import settings
 from app.llm.vllm_client import chat_completion
@@ -209,10 +209,11 @@ def _safe_fallback(intent: str) -> str:
 # Main responder
 # ---------------------------------------------------------------------------
 
-def generate_agent_reply(req, session, intent: str) -> str:
+def generate_agent_reply(req, session, intent: str, instruction: Optional[str] = None) -> str:
     """
     Intent-driven responder.
     Applies framing only; no logic, no extraction, no state changes.
+    `instruction` is a short "what to ask" phrase provided by the controller (or dynamic intent map).
     """
 
     # Select base template
@@ -241,14 +242,15 @@ def generate_agent_reply(req, session, intent: str) -> str:
         agent_rules = (
             "You generate short, cautious replies for verification.\n"
             "NON-NEGOTIABLES:\n"
-            "- Follow the given intent strictly (no new goals).\n"
+            "- Follow the given instruction strictly (no new goals).\n"
             "- NO procedures, steps, or instructions.\n"
             "- At most ONE question.\n"
             "- Do NOT invent or mention any identifiers.\n"
             "- Keep it concise (max 2–3 sentences based on intent).\n"
             "- Do NOT imply resolution or closure unless told.\n"
         )
-        out = chat_completion(agent_rules, reply, temperature=0.2, max_tokens=70)
+        user_prompt = (instruction or "").strip() or reply
+        out = chat_completion(agent_rules, user_prompt, temperature=0.2, max_tokens=70)
         out = (out or "").strip()
         # Strip list markers to reduce accidental procedural formats before limit
         out = re.sub(r"(?m)^\s*(?:\d+\.|[-*•])\s+", "", out)

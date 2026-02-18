@@ -21,7 +21,8 @@ _BOUNDARY_TERMS = ("otp", "pin", "password")
 # Registry-Driven Logic
 # ============================================================
 
-ARTIFACT_INTENT_MAP = {
+# Default mapping (fallback if dynamic intent_map not provided for a key)
+DEFAULT_ARTIFACT_INTENT_MAP = {
     "phoneNumbers": INT_ASK_OFFICIAL_HELPLINE,
     "phishingLinks": INT_ASK_OFFICIAL_WEBSITE,
     "upiIds": INT_ASK_ALT_VERIFICATION,
@@ -46,6 +47,34 @@ _ALLOWED_INTENTS = {
 _ACK_SET = {INT_ACK_CONCERN}
 _RECENT_WINDOW = 3
 _ALT_COOLDOWN_WINDOW = 2
+
+# Broad instruction phrases per intent (fallbacks)
+INSTRUCTION_TEXTS: Dict[str, str] = {
+    INT_ACK_CONCERN: "acknowledge concern briefly without adding steps",
+    INT_REFUSE_SENSITIVE_ONCE: "refuse sharing OTP, PIN, or passwords and steer to official channels",
+    INT_CHANNEL_FAIL: "state the link or page is not loading and ask for an official source to check",
+    INT_ASK_OFFICIAL_WEBSITE: "ask for the official website or domain to verify independently",
+    INT_ASK_OFFICIAL_HELPLINE: "ask for the official helpline number to call and verify",
+    INT_ASK_TICKET_REF: "ask for a reference or complaint number for this case",
+    INT_ASK_DEPARTMENT_BRANCH: "ask which department or branch is handling this case",
+    INT_ASK_ALT_VERIFICATION: "ask for an alternative official verification method",
+    INT_SECONDARY_FAIL: "say it still is not working on your side and ask for another official option",
+    INT_CLOSE_AND_VERIFY_SELF: "politely close and state you will verify through official channels yourself",
+}
+
+def _intent_for_key(ioc_key: str) -> str:
+    """
+    Resolve intent for a registry IOC key, using dynamic registry.intent_map if present,
+    else fallback to DEFAULT_ARTIFACT_INTENT_MAP.
+    """
+    dyn = artifact_registry.intent_map.get(ioc_key) if hasattr(artifact_registry, "intent_map") else None
+    if isinstance(dyn, dict) and dyn.get("intent"):
+        return str(dyn["intent"])
+    return DEFAULT_ARTIFACT_INTENT_MAP.get(ioc_key, INT_ACK_CONCERN)
+
+def _instruction_for(intent: str, ioc_key: str = None) -> str:
+    dyn = artifact_registry.intent_map.get(ioc_key or "", {}) if hasattr(artifact_registry, "intent_map") else {}
+    return str(dyn.get("instruction") or INSTRUCTION_TEXTS.get(intent, "acknowledge briefly"))
 
 def _ioc_category_count_from_dict(intel_dict: Dict[str, Any]) -> int:
     count = 0
@@ -80,11 +109,11 @@ def _scam_priority_boost(spec, scam_type: str) -> int:
     return 0
 
 
-def _pick_missing_intel_intent(
+def _pick_missing_intel_target(
     intel_dict: Dict[str, Any],
     recent_intents: List[str],
     scam_type: str = "UNKNOWN",
-) -> str:
+) -> (str, str):
 
     specs = sorted(
         artifact_registry.artifacts.values(),
@@ -102,7 +131,7 @@ def _pick_missing_intel_intent(
         if not spec.enabled or not spec.ask_enabled or spec.passive_only:
             continue
 
-        intent = ARTIFACT_INTENT_MAP.get(spec.key)
+        intent = _intent_for_key(spec.key)
         if not intent:
             continue
 
@@ -112,23 +141,32 @@ def _pick_missing_intel_intent(
         if intent in recent_window:
             continue
 
-        return intent
+        return intent, spec.key
 
     # Relax cooldown pass
     for spec in specs:
         if not spec.enabled or not spec.ask_enabled or spec.passive_only:
             continue
 
-        intent = ARTIFACT_INTENT_MAP.get(spec.key)
+        intent = _intent_for_key(spec.key)
         if not intent:
             continue
 
         if not intel_dict.get(spec.key):
-            return intent
+            return intent, spec.key
 
     if len(recent_intents) >= 3 and all(x in _ACK_SET for x in recent_intents[-3:]):
-        return INT_ASK_ALT_VERIFICATION
-    return INT_ACK_CONCERN
+        return INT_ASK_ALT_VERIFICATION, None
+    return INT_ACK_CONCERN, None
+
+def _pick_missing_intel_intent(
+    intel_dict: Dict[str, Any],
+    recent_intents: List[str],
+    scam_type: str = "UNKNOWN",
+) -> str:
+    """Compatibility wrapper returning only the intent string for tests/imports."""
+    intent, _ = _pick_missing_intel_target(intel_dict, recent_intents, scam_type)
+    return intent
 
 
 def _pivot_intent(
@@ -136,8 +174,8 @@ def _pivot_intent(
     recent_intents: List[str],
     avoid_intent: str,
     scam_type: str = "UNKNOWN",
-) -> str:
-    return _pick_missing_intel_intent(
+) -> (str, str):
+    return _pick_missing_intel_target(
         intel_dict,
         recent_intents + [avoid_intent],
         scam_type,
@@ -230,6 +268,7 @@ def choose_next_action(
         session.bf_no_progress_count += 1
 
     intent = None
+    target_key = None
     force_finalize = False
     reason = "normal_flow"
 
@@ -275,7 +314,7 @@ def choose_next_action(
     elif session.bf_state == BF_S1:
         intent = INT_ACK_CONCERN
     elif session.bf_state in (BF_S2, BF_S3, BF_S4):
-        intent = _pick_missing_intel_intent(
+        intent, target_key = _pick_missing_intel_target(
             intel_dict,
             session.bf_recent_intents,
             session.scam_type,
@@ -291,9 +330,11 @@ def choose_next_action(
         if (got_phone or got_link):
             if not asked_ticket_recently and intent in (INT_ASK_ALT_VERIFICATION, INT_ACK_CONCERN, INT_ASK_OFFICIAL_WEBSITE):
                 intent = INT_ASK_TICKET_REF
+                target_key = None
                 reason = "progress_ticket_ref"
             elif asked_ticket_recently and not asked_dept_recently and intent in (INT_ASK_ALT_VERIFICATION, INT_ACK_CONCERN):
                 intent = INT_ASK_DEPARTMENT_BRANCH
+                target_key = None
                 reason = "progress_department"
 
         # Milestone finalize: if IOC categories meet threshold and scamDetected is true, request close now.
@@ -301,6 +342,7 @@ def choose_next_action(
             ioc_cnt = _ioc_category_count_from_dict(intel_dict)
             if ioc_cnt >= settings.FINALIZE_MIN_IOC_CATEGORIES and getattr(session, "scamDetected", False):
                 intent = INT_CLOSE_AND_VERIFY_SELF
+                target_key = None
                 force_finalize = True
                 reason = "ioc_milestone_ready"
         except Exception:
@@ -325,7 +367,7 @@ def choose_next_action(
 
     if intent == INT_CLOSE_AND_VERIFY_SELF:
         if should_finalize(session) is None:
-            intent = _pick_missing_intel_intent(
+            intent, target_key = _pick_missing_intel_target(
                 intel_dict,
                 session.bf_recent_intents,
                 session.scam_type,
@@ -348,7 +390,7 @@ def choose_next_action(
         elif session.bf_state == BF_S4:
             session.bf_state = BF_S5
 
-        intent = _pivot_intent(
+        intent, target_key = _pivot_intent(
             intel_dict,
             session.bf_recent_intents,
             intent,
@@ -363,7 +405,7 @@ def choose_next_action(
     # If ALT_VERIFICATION was chosen very recently (last 2 intents), pivot once.
     # ------------------------------------------------------------
     if intent == INT_ASK_ALT_VERIFICATION and intent in session.bf_recent_intents[-_ALT_COOLDOWN_WINDOW:]:
-        intent = _pivot_intent(
+        intent, target_key = _pivot_intent(
             intel_dict,
             session.bf_recent_intents,
             intent,
@@ -374,7 +416,7 @@ def choose_next_action(
 
     # PIVOT 2b: ACK repetition guard — if ACK dominates recent window, pivot away
     if intent in _ACK_SET and sum(1 for x in recent if x in _ACK_SET) >= 2:
-        intent = _pivot_intent(
+        intent, target_key = _pivot_intent(
             intel_dict,
             session.bf_recent_intents,
             intent,
@@ -390,10 +432,15 @@ def choose_next_action(
     if len(session.bf_recent_intents) > 10:
         session.bf_recent_intents.pop(0)
 
+    # Resolve a broad instruction for the responder
+    instruction = _instruction_for(intent, target_key)
+
     return {
         "bf_state": session.bf_state,
         "intent": intent,
         "reason": reason,
         "force_finalize": force_finalize,
         "scam_type": session.scam_type,
+        # NEW: hand instruction to responder for LLM phrasing
+        "instruction": instruction,
     }

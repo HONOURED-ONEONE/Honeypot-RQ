@@ -134,6 +134,7 @@ def handle_event(req):
     bf_state = controller_out.get("bf_state")
     force_finalize = controller_out.get("force_finalize", False)
     reason = controller_out.get("reason", "normal_flow")
+    instruction = controller_out.get("instruction")
 
     assert intent is not None, "Intent must be resolved before response generation"
 
@@ -142,7 +143,12 @@ def handle_event(req):
     finalized = finalize_reason is not None
 
     # Generate reply
-    reply_text = generate_agent_reply(req=req, session=session, intent=intent)
+    reply_text = generate_agent_reply(
+        req=req,
+        session=session,
+        intent=intent,
+        instruction=instruction,
+    )
 
     # ✅ P0.3: Persist the agent reply and increment counters
     try:

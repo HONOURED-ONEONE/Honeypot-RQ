@@ -3,6 +3,7 @@ import time
 import json
 from dataclasses import dataclass, field
 from typing import Callable, List, Optional, Dict, Any
+from app.settings import settings
 
 @dataclass
 class ArtifactSpec:
@@ -53,6 +54,8 @@ class ArtifactRegistry:
         self.artifacts: Dict[str, ArtifactSpec] = {}
         self._defaults: Dict[str, Dict[str, Any]] = {}
         self._last_refresh = 0
+        # NEW: dynamic intent map (IOC key -> {intent, instruction})
+        self.intent_map: Dict[str, Dict[str, Any]] = {}
 
     def register(self, spec: ArtifactSpec):
         self.artifacts[spec.key] = spec
@@ -63,6 +66,93 @@ class ArtifactRegistry:
             "ask_enabled": spec.ask_enabled,
             "passive_only": spec.passive_only
         }
+
+    # --- NEW: Helpers for dynamic specs ------------------------------------
+    def _build_extract_fn(self, pattern: str) -> Callable[[str], List[str]]:
+        pat = re.compile(pattern, re.IGNORECASE)
+        return lambda t, _p=pat: _p.findall(t or "")
+
+    def _resolve_normalize_fn(self, name_or_flag: Optional[str]) -> Optional[Callable[[str], str]]:
+        if not name_or_flag:
+            return None
+        v = (name_or_flag or "").strip().lower()
+        if v in ("lower", "to_lower"):
+            return lambda s: (s or "").lower()
+        if v in ("digits_only", "numbers_only", "strip_non_digits"):
+            return lambda s: re.sub(r"\D", "", s or "")
+        # allow referencing built-ins by name
+        if v == "normalize_phone":
+            return normalize_phone
+        if v == "normalize_upi":
+            return normalize_upi
+        if v == "normalize_url":
+            return normalize_url
+        if v == "normalize_bank":
+            return normalize_bank
+        return None
+
+    def _build_validate_fn(self, pattern: Optional[str]) -> Optional[Callable[[str], bool]]:
+        if not pattern:
+            return None
+        vp = re.compile(pattern, re.IGNORECASE)
+        return lambda s, _vp=vp: bool(_vp.fullmatch(s or ""))
+
+    def _apply_dynamic(self, dyn: Dict[str, Any]):
+        """
+        Register or update dynamic artifacts from a dict:
+        {
+          "myKey": {
+            "pattern": "\\babc\\d{3}\\b",
+            "normalize": "lower|digits_only|normalize_url|...",
+            "validate_pattern": "^[a-z]{3}\\d{3}$",
+            "priority": 30,
+            "enabled": true,
+            "ask_enabled": true,
+            "passive_only": false,
+            "conflicts_with": ["someOtherKey"]
+          },
+          ...
+        }
+        """
+        if not isinstance(dyn, dict):
+            return
+        for key, spec in dyn.items():
+            if not isinstance(spec, dict):
+                continue
+            pattern = spec.get("pattern")
+            if not pattern:
+                continue
+            extract_fn = self._build_extract_fn(pattern)
+            normalize_fn = self._resolve_normalize_fn(spec.get("normalize"))
+            validate_fn = self._build_validate_fn(spec.get("validate_pattern"))
+            conflicts = list(spec.get("conflicts_with") or [])
+            priority = int(spec.get("priority", 0) or 0)
+            ask_enabled = bool(spec.get("ask_enabled", True))
+            passive_only = bool(spec.get("passive_only", False))
+            enabled = bool(spec.get("enabled", True))
+
+            if key in self.artifacts:
+                s = self.artifacts[key]
+                s.extract_fn = extract_fn
+                s.normalize_fn = normalize_fn
+                s.validate_fn = validate_fn
+                s.conflicts_with = conflicts
+                s.priority = priority
+                s.ask_enabled = ask_enabled
+                s.passive_only = passive_only
+                s.enabled = enabled
+            else:
+                self.register(ArtifactSpec(
+                    key=key,
+                    extract_fn=extract_fn,
+                    normalize_fn=normalize_fn,
+                    validate_fn=validate_fn,
+                    conflicts_with=conflicts,
+                    priority=priority,
+                    ask_enabled=ask_enabled,
+                    passive_only=passive_only,
+                    enabled=enabled,
+                ))
 
     def extract_all(self, text: str) -> Dict[str, List[str]]:
         self._maybe_refresh_overrides()
@@ -118,24 +208,54 @@ class ArtifactRegistry:
         return text
 
     def _maybe_refresh_overrides(self):
-        from app.settings import settings
+        # Re-import settings at call time so tests can patch app.settings.settings
+        from app.settings import settings as runtime_settings
         now = time.time()
-        if now - self._last_refresh < settings.REGISTRY_TTL:
+        if now - self._last_refresh < runtime_settings.REGISTRY_TTL:
             return
-        
+
         self._last_refresh = now
         try:
             from app.store.redis_conn import get_redis
             r = get_redis()
-            raw = r.get(settings.REGISTRY_OVERRIDES_KEY)
-            
-            overrides = {}
-            if raw:
-                data = json.loads(raw)
-                if isinstance(data, dict):
-                    overrides = data
-            
-            self._apply_overrides(overrides)
+
+            # 1) Basic overrides for existing artifacts
+            try:
+                raw = r.get(runtime_settings.REGISTRY_OVERRIDES_KEY)
+                overrides = {}
+                if raw:
+                    data = json.loads(raw)
+                    if isinstance(data, dict):
+                        overrides = data
+                self._apply_overrides(overrides)
+            except Exception:
+                pass
+
+            # 2) Dynamic artifacts (add/update at runtime)
+            try:
+                dyn_raw = r.get(getattr(runtime_settings, "REGISTRY_DYNAMIC_KEY", "registry:dynamic"))
+                if dyn_raw:
+                    dyn = json.loads(dyn_raw)
+                    self._apply_dynamic(dyn)
+            except Exception:
+                pass
+
+            # 3) Intent map (IOC key -> {intent, instruction})
+            try:
+                im_raw = r.get(getattr(runtime_settings, "REGISTRY_INTENT_MAP_KEY", "registry:intent_map"))
+                if im_raw:
+                    im = json.loads(im_raw)
+                    if isinstance(im, dict):
+                        cleaned = {}
+                        for k, v in im.items():
+                            if isinstance(v, dict):
+                                cleaned[k] = {
+                                    "intent": v.get("intent"),
+                                    "instruction": v.get("instruction"),
+                                }
+                        self.intent_map = cleaned
+            except Exception:
+                pass
         except Exception:
             # Maintain stability if Redis or JSON parsing fails
             pass

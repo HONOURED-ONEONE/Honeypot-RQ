@@ -29,6 +29,10 @@ class Settings:
     # Registry Overrides
     REGISTRY_TTL: int = int(os.getenv("REGISTRY_TTL", "60"))
     REGISTRY_OVERRIDES_KEY: str = os.getenv("REGISTRY_OVERRIDES_KEY", "registry:overrides")
+    # NEW: Dynamic artifact specs (runtime add-ons)
+    REGISTRY_DYNAMIC_KEY: str = os.getenv("REGISTRY_DYNAMIC_KEY", "registry:dynamic")
+    # NEW: Intent map (key -> {intent, instruction}) to drive controller & responder
+    REGISTRY_INTENT_MAP_KEY: str = os.getenv("REGISTRY_INTENT_MAP_KEY", "registry:intent_map")
 
     GUVI_CALLBACK_URL: str = os.getenv("GUVI_CALLBACK_URL", "")
     CALLBACK_TIMEOUT_SEC: int = int(os.getenv("CALLBACK_TIMEOUT_SEC", "5"))
