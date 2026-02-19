@@ -7,6 +7,8 @@ class Intelligence:
     upiIds: List[str] = field(default_factory=list)
     phishingLinks: List[str] = field(default_factory=list)
     phoneNumbers: List[str] = field(default_factory=list)
+    # ✅ NEW: First-class support for emails (recognized in evaluation)
+    emailAddresses: List[str] = field(default_factory=list)
     # ✅ P0.2: Required by callback payload and evaluation docs
     suspiciousKeywords: List[str] = field(default_factory=list)
     # ✅ NEW: Runtime IOC add-ons (key -> list[str])

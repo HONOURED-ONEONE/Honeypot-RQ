@@ -13,6 +13,8 @@ def build_final_payload(session: SessionState) -> dict:
         "upiIds": intel.upiIds,
         "phishingLinks": intel.phishingLinks,
         "phoneNumbers": intel.phoneNumbers,
+        # ✅ NEW: include emails in final payload (supported by evaluator schema)
+        "emailAddresses": intel.emailAddresses,
         "suspiciousKeywords": getattr(intel, "suspiciousKeywords", []),
     }
     if getattr(settings, "INCLUDE_DYNAMIC_ARTIFACTS_CALLBACK", False):
