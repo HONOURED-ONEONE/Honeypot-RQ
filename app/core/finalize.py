@@ -2,7 +2,6 @@ from typing import Optional
 from app.settings import settings
 from app.intel.artifact_registry import artifact_registry
 
-
 def _ioc_category_count(session) -> int:
     """
     Counts distinct artifact categories populated in the registry.
@@ -12,12 +11,22 @@ def _ioc_category_count(session) -> int:
     count = 0
     # Use registry to determine which keys to check
     for key in artifact_registry.artifacts.keys():
+        # 1) Static Intelligence fields
         if hasattr(intel, key):
             vals = getattr(intel, key)
             if isinstance(vals, list) and len(vals) > 0:
                 count += 1
+                continue
+        # 2) Dynamic add-ons stored in dynamicArtifacts
+        try:
+            dyn = getattr(intel, "dynamicArtifacts", None)
+            if isinstance(dyn, dict):
+                vals2 = dyn.get(key)
+                if isinstance(vals2, list) and len(vals2) > 0:
+                    count += 1
+        except Exception:
+            pass
     return count
-
 
 def should_finalize(session) -> Optional[str]:
     """

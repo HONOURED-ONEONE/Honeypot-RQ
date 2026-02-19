@@ -122,11 +122,22 @@ def handle_event(req):
         pass
 
     # Controller
+    # ✅ NEW: Flatten dynamicArtifacts into intel_dict so controller/finalize can see runtime keys
+    try:
+        intel_dict = dict(session.extractedIntelligence.__dict__ or {})
+        dyn = intel_dict.pop("dynamicArtifacts", None)
+        if isinstance(dyn, dict):
+            for k, v in dyn.items():
+                if isinstance(v, list):
+                    intel_dict[k] = v
+    except Exception:
+        intel_dict = session.extractedIntelligence.__dict__
+
     controller_out = choose_next_action(
         session=session,
         latest_text=req.message.text or "",
-        intel_dict=session.extractedIntelligence.__dict__,
-        detection_dict=req.detection or {},  # ✅ detection is dict per schema
+        intel_dict=intel_dict,
+        detection_dict=req.detection or {}, # ✅ detection is dict per schema
         settings=app_settings,
     )
 

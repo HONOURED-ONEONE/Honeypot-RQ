@@ -1,6 +1,5 @@
 from app.intel.artifact_registry import artifact_registry
-from app.intel.keywords import extract_keywords  # ✅ P0.2: keyword signals
-
+from app.intel.keywords import extract_keywords # ✅ P0.2: keyword signals
 
 def _dedupe_extend(target_list, items):
     existing = set(target_list)
@@ -9,6 +8,13 @@ def _dedupe_extend(target_list, items):
             target_list.append(it)
             existing.add(it)
 
+def _dedupe_extend_map(target_map, key, items):
+    if target_map is None:
+        return
+    if key not in target_map or not isinstance(target_map.get(key), list):
+        target_map[key] = []
+    _dedupe_extend(target_map[key], items)
+
 def update_intelligence_from_text(session, text: str):
     """
     Registry-based intelligence extraction.
@@ -16,14 +22,22 @@ def update_intelligence_from_text(session, text: str):
     """
     # 1) Extraction via Registry (The ONLY authority for artifacts)
     intel_results = artifact_registry.extract_all(text)
+
     # 2) Update session state with registered artifacts ONLY
     for key, values in intel_results.items():
         if hasattr(session.extractedIntelligence, key):
             target = getattr(session.extractedIntelligence, key)
             _dedupe_extend(target, values)
+        else:
+            # ✅ NEW: Store runtime IOC add-ons in dynamicArtifacts
+            try:
+                dyn = getattr(session.extractedIntelligence, "dynamicArtifacts", None)
+                _dedupe_extend_map(dyn, key, values)
+            except Exception:
+                pass
 
     # 3) ✅ P0.2: Also compute and store suspicious keyword signals
-    #    This field is required by the final callback payload used in evaluation.
+    # This field is required by the final callback payload used in evaluation.
     try:
         kws = extract_keywords(text or "")
         if hasattr(session.extractedIntelligence, "suspiciousKeywords"):
@@ -47,4 +61,3 @@ def extract_upi_ids(text: str):
 def extract_bank_accounts(text: str):
     results = artifact_registry.extract_all(text)
     return results.get("bankAccounts", [])
-

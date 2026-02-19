@@ -240,6 +240,7 @@ def choose_next_action(
             "reason": "boundary_refusal",
             "force_finalize": False,
             "scam_type": session.scam_type,
+            "instruction": _instruction_for(intent, None),
         }
 
     # ------------------------------------------------------------

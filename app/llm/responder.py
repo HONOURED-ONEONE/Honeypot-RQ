@@ -38,13 +38,6 @@ INTENTS_ALLOW_3_SENTENCES = {
     INT_SECONDARY_FAIL,
 }
 
-# Only allow LLM rephrase on intents that are least prone to instruction creep
-# (Keep rephrase off for ASK_* intents; they are more vulnerable to "how-to" expansions.)
-SAFE_FOR_REPHRASE = {
-    INT_ACK_CONCERN,
-    INT_REFUSE_SENSITIVE_ONCE,
-}
-
 # ---------------------------------------------------------------------------
 # Templates (intent-driven only; no tactics, no procedures)
 # Each template is a list of candidate strings.
@@ -160,10 +153,10 @@ IDENTIFIER_PATTERNS = {
 # Procedural-language guard: block step-by-step/instructional phrasing
 #
 PROCEDURAL_PATTERNS = [
-    r"\b(step|steps|follow these|do the following)\b",
-    r"(?m)^\s*\d+\.",            # numbered list lines
-    r"(?m)^\s*[-*•]\s+",         # bullets
-    r"\b(click|open|go to|log ?in|enter|submit|navigate|install|download)\b",
+    r"\b(?:step|steps|follow these|do the following)\b",
+    r"(?m)^\s*\d+\.",             # numbered list lines
+    r"(?m)^\s*[-*•]\s+",          # bullets
+    r"\b(?:click|open|go to|log ?in|enter|submit|navigate|install|download)\b",
 ]
 
 def _looks_procedural(s: str) -> bool:
@@ -230,10 +223,9 @@ def generate_agent_reply(req, session, intent: str, instruction: Optional[str] =
     # Always run minimal safety on the template reply
     if _contains_forbidden(reply) or _introduces_new_identifier(reply, session):
         reply = _safe_fallback(intent)
-        # Fall through; we still may return reply if rephrase is disabled.
 
-    # Gate LLM rephrase: allow only when enabled AND intent is safe to rephrase
-    if (not getattr(settings, "BF_LLM_REPHRASE", False)) or (intent not in SAFE_FOR_REPHRASE):
+    # If rephrase is disabled, return the safe template
+    if not getattr(settings, "BF_LLM_REPHRASE", False):
         return reply
 
     # Optional LLM rephrase (strictly bounded)
