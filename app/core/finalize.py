@@ -11,13 +11,13 @@ def _ioc_category_count(session) -> int:
     count = 0
     # Use registry to determine which keys to check
     for key in artifact_registry.artifacts.keys():
-        # 1) Static Intelligence fields
+        # 1) static fields on Intelligence
         if hasattr(intel, key):
             vals = getattr(intel, key)
             if isinstance(vals, list) and len(vals) > 0:
                 count += 1
                 continue
-        # 2) Dynamic add-ons stored in dynamicArtifacts
+        # 2) dynamic add-ons bucket
         try:
             dyn = getattr(intel, "dynamicArtifacts", None)
             if isinstance(dyn, dict):

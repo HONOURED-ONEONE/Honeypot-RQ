@@ -34,8 +34,10 @@ class Settings:
     # NEW: Intent map (key -> {intent, instruction}) to drive controller & responder
     REGISTRY_INTENT_MAP_KEY: str = os.getenv("REGISTRY_INTENT_MAP_KEY", "registry:intent_map")
 
-    # NEW: include dynamicArtifacts in callback payload (off by default to avoid strict-schema breakage)
-    INCLUDE_DYNAMIC_ARTIFACTS_CALLBACK: bool = os.getenv("INCLUDE_DYNAMIC_ARTIFACTS_CALLBACK", "false").lower() == "true"
+    # NEW: include dynamicArtifacts in callback payload (default: false, to avoid strict schema issues)
+    INCLUDE_DYNAMIC_ARTIFACTS_CALLBACK: bool = os.getenv(
+        "INCLUDE_DYNAMIC_ARTIFACTS_CALLBACK", "false"
+    ).lower() == "true"
 
     GUVI_CALLBACK_URL: str = os.getenv("GUVI_CALLBACK_URL", "")
     CALLBACK_TIMEOUT_SEC: int = int(os.getenv("CALLBACK_TIMEOUT_SEC", "5"))

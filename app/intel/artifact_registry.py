@@ -19,7 +19,7 @@ class ArtifactSpec:
 
 # Regexes from existing extractor.py
 UPI_RE = re.compile(r"\b[a-zA-Z0-9.\-_]{2,64}@[a-zA-Z]{2,32}\b")
-# ✅ P1.2e v2: Robust single-pattern URL extractor (http(s)://… or www.…)
+# ✅ Robust single-pattern URL extractor (http(s)://… or www.…)
 # Correct alternation: http(s)://... OR www....
 URL_RE = re.compile(r"\b(?:https?://\S+|www\.\S+)", re.IGNORECASE)
 _PHONE_PATTERNS = [

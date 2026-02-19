@@ -122,7 +122,7 @@ def handle_event(req):
         pass
 
     # Controller
-    # ✅ NEW: Flatten dynamicArtifacts into intel_dict so controller/finalize can see runtime keys
+    # ✅ NEW: Flatten dynamicArtifacts so controller/finalize see runtime IOC keys
     try:
         intel_dict = dict(session.extractedIntelligence.__dict__ or {})
         dyn = intel_dict.pop("dynamicArtifacts", None)

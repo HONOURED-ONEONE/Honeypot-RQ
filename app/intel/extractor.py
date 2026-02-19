@@ -29,7 +29,7 @@ def update_intelligence_from_text(session, text: str):
             target = getattr(session.extractedIntelligence, key)
             _dedupe_extend(target, values)
         else:
-            # ✅ NEW: Store runtime IOC add-ons in dynamicArtifacts
+            # ✅ NEW: store runtime IOC add-ons
             try:
                 dyn = getattr(session.extractedIntelligence, "dynamicArtifacts", None)
                 _dedupe_extend_map(dyn, key, values)

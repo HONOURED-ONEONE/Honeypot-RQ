@@ -9,7 +9,7 @@ class Intelligence:
     phoneNumbers: List[str] = field(default_factory=list)
     # ✅ P0.2: Required by callback payload and evaluation docs
     suspiciousKeywords: List[str] = field(default_factory=list)
-    # ✅ NEW: Runtime IOC add-ons land here (key -> list[str])
+    # ✅ NEW: Runtime IOC add-ons (key -> list[str])
     dynamicArtifacts: Dict[str, List[str]] = field(default_factory=dict)
 
 @dataclass
