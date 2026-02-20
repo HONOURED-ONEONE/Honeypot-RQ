@@ -26,6 +26,11 @@ class Settings:
     BF_SECONDARY_BOUNCE_LIMIT: int = int(os.getenv("BF_SECONDARY_BOUNCE_LIMIT", "1"))
     ALT_COOLDOWN_WINDOW: int = int(os.getenv("ALT_COOLDOWN_WINDOW", "2"))
     BF_LLM_REPHRASE: bool = os.getenv("BF_LLM_REPHRASE", "false").lower() == "true"
+    # Group B: semantic cooldown & pressure knobs
+    ALT_SEMANTIC_WINDOW: int = int(os.getenv("ALT_SEMANTIC_WINDOW", "5"))        # lookback turns
+    ALT_MAX_USES_IN_WINDOW: int = int(os.getenv("ALT_MAX_USES_IN_WINDOW", "1"))  # max ALT occurrences allowed in window
+    OTP_PRESSURE_WINDOW: int = int(os.getenv("OTP_PRESSURE_WINDOW", "4"))        # last N scammer msgs to scan
+    OTP_PRESSURE_THRESHOLD: int = int(os.getenv("OTP_PRESSURE_THRESHOLD", "2"))  # occurrences needed to trigger pivot
 
     # Registry Overrides
     REGISTRY_TTL: int = int(os.getenv("REGISTRY_TTL", "60"))

@@ -97,3 +97,9 @@ CLOSING_INTENTS = {
 # How many previous turns to consider before we allow repeating ALT_VERIFICATION
 # Increasing to 2 helps avoid visible loops in short evaluator runs.
 _ALT_COOLDOWN_WINDOW = int(getattr(settings, "ALT_COOLDOWN_WINDOW", 2))
+
+# Group B: semantic cooldown & OTP pressure (read from settings, sane defaults)
+_ALT_SEMANTIC_WINDOW = int(getattr(settings, "ALT_SEMANTIC_WINDOW", 5))
+_ALT_MAX_USES_IN_WINDOW = int(getattr(settings, "ALT_MAX_USES_IN_WINDOW", 1))
+_OTP_PRESSURE_WINDOW = int(getattr(settings, "OTP_PRESSURE_WINDOW", 4))
+_OTP_PRESSURE_THRESHOLD = int(getattr(settings, "OTP_PRESSURE_THRESHOLD", 2))

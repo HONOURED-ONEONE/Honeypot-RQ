@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 from typing import Callable, List, Optional, Dict, Any, Iterable, Set, Tuple
 from app.settings import settings
 from app.store.redis_conn import get_redis
+from urllib.parse import urlparse
 
 @dataclass
 class ArtifactSpec:
@@ -26,11 +27,20 @@ class ArtifactSpec:
 # Policy: POLICY/POL/INS + 6–16 A-Z0-9
 # Order: ORDER/ORD + 6–16 A-Z0-9
 # CASE: e.g., REF-987654 or CASE-AB12
-_CASE_ID_RE = re.compile(r'(?<![A-Z0-9])(?:REF|CASE|TKT|SR)[-\s]?[A-Z0-9]{4,12}(?![A-Z0-9])', re.I)
+_CASE_ID_RE = re.compile(
+    r'(?<![A-Z0-9])(?:REF|CASE|TKT|SR)[-\s]?[A-Z0-9]{4,12}(?![A-Z0-9])',
+    re.I
+)
 # POLICY: e.g., POL-12345678 (typical insurer style)
-_POLICY_NO_RE = re.compile(r'(?<![A-Z0-9])(?:POL|POLICY)[-\s]?[A-Z0-9]{6,16}(?![A-Z0-9])', re.I)
+_POLICY_NO_RE = re.compile(
+    r'(?<![A-Z0-9])(?:POL|POLICY)[-\s]?[A-Z0-9]{6,16}(?![A-Z0-9])',
+    re.I
+)
 # ORDER: e.g., ORD-123456, PO-998877, ORDER-ABC123
-_ORDER_NO_RE = re.compile(r'(?<![A-Z0-9])(?:ORD|ORDER|PO)[-\s]?[A-Z0-9]{4,16}(?![A-Z0-9])', re.I)
+_ORDER_NO_RE = re.compile(
+    r'(?<![A-Z0-9])(?:ORD|ORDER|PO)[-\s]?[A-Z0-9]{4,16}(?![A-Z0-9])',
+    re.I
+)
 
 # Regexes from existing extractor.py
 UPI_RE = re.compile(r"\b[a-zA-Z0-9.\-_]{2,64}@[a-zA-Z]{2,32}\b")
@@ -59,10 +69,47 @@ def normalize_upi(s: str) -> str:
     return s.lower()
 
 def normalize_url(u: str) -> str:
-    u = u.strip().rstrip(').,]')
+    # Strip common trailing punctuation that frequently rides with URLs
+    u = (u or "").strip().rstrip(').,;!?\'"[]{}')
+    # Promote www.* to https://www.*
     if u.lower().startswith('www.'):
         u = 'https://' + u
     return u
+
+def _valid_http_url(u: str) -> bool:
+    """
+    Minimal, side‑effect‑free URL validation:
+    - scheme is http/https
+    - netloc present
+    - reject obvious loopback/private hostnames (best‑effort)
+    """
+    try:
+        p = urlparse(u)
+        if p.scheme not in ("http", "https") or not p.netloc:
+            return False
+        host = (p.hostname or "").lower()
+        if not host:
+            return False
+        if host in {"localhost", "127.0.0.1"} or host.endswith(".local"):
+            return False
+        return True
+    except Exception:
+        return False
+
+def _canonicalize_urls(urls: List[str]) -> List[str]:
+    """
+    Apply shared normalization + minimal validation + de‑duplication.
+    This function is intentionally lightweight and consistent with the
+    canonicalization used elsewhere, so Registry and Tier‑1 paths converge.
+    """
+    out: List[str] = []
+    seen: Set[str] = set()
+    for u in urls or []:
+        cu = normalize_url(u)
+        if cu and _valid_http_url(cu) and cu not in seen:
+            out.append(cu)
+            seen.add(cu)
+    return out
 
 def normalize_bank(s: str) -> str:
     return re.sub(r"\D", "", s)
@@ -296,6 +343,11 @@ class ArtifactRegistry:
             
             if not is_conflicted and val not in results[key]:
                 results[key].append(val)
+
+        # Final canonicalization within the Registry aggregator
+        # Ensures URLs are normalized/deduped even if upstream finders disagree
+        if "phishingLinks" in results:
+            results["phishingLinks"] = _canonicalize_urls(results.get("phishingLinks", []))
 
         return results
 

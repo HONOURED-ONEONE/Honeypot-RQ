@@ -1,4 +1,4 @@
-from app.intel.artifact_registry import artifact_registry
+from app.intel.artifact_registry import artifact_registry, normalize_url
 from app.intel.keywords import extract_keywords  # ✅ P0.2: keyword signals
 #
 # ✅ Tier-1 deterministic extraction (Regex-hardened)
@@ -6,7 +6,11 @@ from app.intel.keywords import extract_keywords  # ✅ P0.2: keyword signals
 #    Registry remains the single source of “what keys exist” in scoring,
 #    but we opportunistically merge core_extraction findings into the model.
 #
-from app.intel.core_extraction import extract_all as core_extract_all
+from app.intel.core_extraction import (
+    extract_all as core_extract_all,
+    is_valid_phone,
+    valid_url,
+)
 
 def _dedupe_extend(target_list, items):
     existing = set(target_list)
@@ -21,6 +25,40 @@ def _dedupe_extend_map(target_map, key, items):
     if key not in target_map or not isinstance(target_map.get(key), list):
         target_map[key] = []
     _dedupe_extend(target_map[key], items)
+
+def _digits_only(s: str) -> str:
+    import re
+    return re.sub(r"\D+", "", s or "")
+
+def _canonicalize_urls(urls):
+    out = []
+    seen = set()
+    for u in (urls or []):
+        cu = normalize_url(u)
+        if cu and valid_url(cu) and cu not in seen:
+            out.append(cu); seen.add(cu)
+    return out
+
+def _post_merge_sanitize(session):
+    """
+    Cross-category conflict resolution and canonicalization after
+    Registry + Tier-1 merge, before data is persisted.
+    """
+    intel = session.extractedIntelligence
+    # 1) URL canonicalization & de-dup
+    intel.phishingLinks = _canonicalize_urls(intel.phishingLinks or [])
+    # 2) Phones vs Bank accounts: remove any 'account' that is actually a phone
+    phone_digits = {_digits_only(p) for p in (intel.phoneNumbers or [])}
+    cleaned_accts = []
+    for acc in (intel.bankAccounts or []):
+        d = _digits_only(acc)
+        # treat 10-digit mobiles as phones (and never as accounts)
+        if d in phone_digits or is_valid_phone(d):
+            continue
+        cleaned_accts.append(d)  # keep accounts as pure digits
+    intel.bankAccounts = sorted(set(cleaned_accts))
+    # 3) De-dup phones and keep canonical +91 formatting where present in upstream
+    intel.phoneNumbers = sorted(set(intel.phoneNumbers or []))
 
 def update_intelligence_from_text(session, text: str):
     """
@@ -77,6 +115,13 @@ def update_intelligence_from_text(session, text: str):
             _dedupe_extend(session.extractedIntelligence.suspiciousKeywords, kws)
     except Exception:
         # Maintain stability if keyword extraction fails (non-influential)
+        pass
+
+    # --- 4) Post-merge integrity pass (conflicts & canonicalization)
+    try:
+        _post_merge_sanitize(session)
+    except Exception:
+        # Non-influential; better to proceed than fail extraction pipeline
         pass
 
 # Backwards compatibility / Patch support

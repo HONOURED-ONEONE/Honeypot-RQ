@@ -38,6 +38,11 @@ def test_bias_helpline_after_boundary_when_otp_present_and_no_phone():
     # Pivot 1 is active in BF_S2, BF_S3, or BF_S4
     session.bf_state = "BF_S2"
     intel = {"phoneNumbers": [], "upiIds": [], "bankAccounts": [], "phishingLinks": []}
+    
+    # New logic requires threshold=2 in history
+    session.conversation.append({"sender": "scammer", "text": "otp please"})
+    session.conversation.append({"sender": "scammer", "text": "Send OTP now"})
+    
     out = choose_next_action(
         session=session,
         latest_text="Send OTP now",

@@ -1,7 +1,13 @@
 from typing import Dict, Any, List
 
 from app.core.broken_flow_constants import *
-from app.core.broken_flow_constants import _ALT_COOLDOWN_WINDOW
+from app.core.broken_flow_constants import (
+    _ALT_COOLDOWN_WINDOW,
+    _ALT_SEMANTIC_WINDOW,
+    _ALT_MAX_USES_IN_WINDOW,
+    _OTP_PRESSURE_WINDOW,
+    _OTP_PRESSURE_THRESHOLD,
+)
 from app.core.state_machine import *
 from app.store.models import SessionState
 from app.core.finalize import should_finalize
@@ -218,6 +224,45 @@ def _pivot_intent(
     )
 
 
+# ----------------------------
+# Group B helpers
+# ----------------------------
+def _count_intent_in_window(recent: List[str], name: str, window: int) -> int:
+    if window <= 0:
+        return recent.count(name)
+    return sum(1 for x in recent[-window:] if x == name)
+
+def _otp_pressure_count(session, window_msgs: int) -> int:
+    try:
+        convo = getattr(session, "conversation", []) or []
+        # Scan last N scammer messages for boundary terms
+        c = 0
+        for m in reversed(convo):
+            if window_msgs <= 0:
+                break
+            if (m.get("sender") or "").lower() == "scammer":
+                txt = (m.get("text") or "").lower()
+                if any(t in txt for t in _BOUNDARY_TERMS):
+                    c += 1
+                window_msgs -= 1
+        return c
+    except Exception:
+        return 0
+
+def _alt_satisfied(intel_dict: Dict[str, Any]) -> bool:
+    """
+    ALT_VERIFICATION typically seeks alternate official verification paths,
+    which often yield phoneNumbers or phishingLinks. If either is already present,
+    prefer not to ask ALT again.
+    """
+    try:
+        has_phone = bool(intel_dict.get("phoneNumbers"))
+        has_link = bool(intel_dict.get("phishingLinks"))
+        return has_phone or has_link
+    except Exception:
+        return False
+
+
 # ============================================================
 # Controller
 # ============================================================
@@ -398,45 +443,49 @@ def choose_next_action(
 
         intent = _constrain(intent)
 
-        # Keep existing OTP → HELPLINE bias when phone missing
+        # ----------------------------
+        # Group B: OTP pressure (even if phone exists)
+        # ----------------------------
+        otp_recent = _otp_pressure_count(session, _OTP_PRESSURE_WINDOW)
         got_phone = bool(intel_dict.get("phoneNumbers"))
-        otp_in_latest = "otp" in (latest_text or "").lower()
-        if otp_in_latest and not got_phone:
-            intent = INT_ASK_OFFICIAL_HELPLINE
-            reason = "otp_bias_helpline"
-
-        # --------- Loop prevention and OTP pivot ----------
-        recent_intents_list: List[str] = list(getattr(session, "bf_recent_intents", []) or [])
-
-        def _cooldown_blocked(name: str) -> bool:
-            if not name:
-                return False
-            # Look at the last _ALT_COOLDOWN_WINDOW entries
-            window = recent_intents_list[-_ALT_COOLDOWN_WINDOW:] if _ALT_COOLDOWN_WINDOW > 0 else recent_intents_list
-            return any(x == name for x in window)
-
-        def _has_phone() -> bool:
-            try:
-                phones = (intel_dict or {}).get("phoneNumbers") or []
-                return len(phones) > 0
-            except Exception:
-                return False
-
-        def _otp_detected() -> bool:
-            return "otp" in (latest_text or "").lower()
-
-        if intent == INT_ASK_ALT_VERIFICATION:
-            if _otp_detected() and not _has_phone():
+        if otp_recent >= _OTP_PRESSURE_THRESHOLD:
+            # First assert boundary once; if already asserted, steer to helpline (non-procedural) again
+            if not session.bf_policy_refused_once:
+                intent = INT_REFUSE_SENSITIVE_ONCE
+                session.bf_policy_refused_once = True
+                reason = "otp_pressure_refusal"
+            else:
                 intent = INT_ASK_OFFICIAL_HELPLINE
-                reason = "otp_pivot_helpline"
-            elif _cooldown_blocked(INT_ASK_ALT_VERIFICATION):
-                intent = INT_ACK_CONCERN
-                reason = "alt_verification_cooldown_pivot"
+                reason = "otp_pressure_helpline"
 
-    elif session.bf_state == BF_S5:
-        intent = INT_CLOSE_AND_VERIFY_SELF
-        force_finalize = True
-    else:
+        # ----------------------------
+        # Group B: ALT satisfaction & semantic cooldown
+        # ----------------------------
+        recent_full: List[str] = list(getattr(session, "bf_recent_intents", []) or [])
+        if intent == INT_ASK_ALT_VERIFICATION:
+            # 1) Satisfied suppression: if phone or link already present, avoid ALT
+            if _alt_satisfied(intel_dict):
+                asked_ticket_recently = INT_ASK_TICKET_REF in recent
+                asked_dept_recently = INT_ASK_DEPARTMENT_BRANCH in recent
+                if not asked_ticket_recently:
+                    intent = INT_ASK_TICKET_REF
+                    reason = "alt_satisfied_to_ticket"
+                elif not asked_dept_recently:
+                    intent = INT_ASK_DEPARTMENT_BRANCH
+                    reason = "alt_satisfied_to_department"
+                else:
+                    intent = INT_ACK_CONCERN
+                    reason = "alt_satisfied_to_ack"
+            else:
+                # 2) Semantic cooldown: limit total ALT uses in lookback window
+                alt_uses = _count_intent_in_window(recent_full, INT_ASK_ALT_VERIFICATION, _ALT_SEMANTIC_WINDOW)
+                if alt_uses >= _ALT_MAX_USES_IN_WINDOW:
+                    # Pivot to another productive target using registry-based chooser
+                    intent, _ = _pivot_intent(intel_dict, session.bf_recent_intents, INT_ASK_ALT_VERIFICATION, session.scam_type)
+                    reason = "alt_semantic_cooldown_pivot"
+
+    # Final guard: terminal state
+    if session.bf_state == BF_S5 and intent != INT_CLOSE_AND_VERIFY_SELF:
         intent = INT_CLOSE_AND_VERIFY_SELF
         force_finalize = True
 

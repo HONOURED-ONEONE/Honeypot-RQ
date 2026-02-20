@@ -132,6 +132,22 @@ INTENT_TEMPLATES: Dict[str, List[str]] = {
 }
 
 # ---------------------------------------------------------------------------
+# Intent → minimal fallback goal (used ONLY if instruction is missing)
+# ---------------------------------------------------------------------------
+INTENT_GOALS: Dict[str, str] = {
+    INT_ACK_CONCERN: "Briefly acknowledge the concern; if you ask, make it one short question.",
+    INT_REFUSE_SENSITIVE_ONCE: "Refuse to share OTP, PIN, or passwords and ask which official channel to verify.",
+    INT_CHANNEL_FAIL: "Say the page is not loading and ask for an official source to check.",
+    INT_ASK_OFFICIAL_WEBSITE: "Ask for the official website or domain in one short question.",
+    INT_ASK_OFFICIAL_HELPLINE: "Ask for the official helpline number in one short question.",
+    INT_ASK_TICKET_REF: "Ask for a reference or complaint number in one short question.",
+    INT_ASK_DEPARTMENT_BRANCH: "Ask which department or branch is handling the case in one short question.",
+    INT_ASK_ALT_VERIFICATION: "Ask for an alternative official verification method in one short question.",
+    INT_SECONDARY_FAIL: "Say it still isn't working and ask for another official option.",
+    INT_CLOSE_AND_VERIFY_SELF: "Politely close and state you will verify through official channels yourself. Do not ask a question.",
+}
+
+# ---------------------------------------------------------------------------
 # Safety & validation helpers
 # ---------------------------------------------------------------------------
 
@@ -241,16 +257,28 @@ def generate_agent_reply(req, session, intent: str, instruction: Optional[str] =
             "- Do NOT imply resolution or closure unless told.\n"
         )
         
-        user_prompt = (instruction or "").strip() or reply
-        
-        # If instruction is present and rephrase is on, enforce single-question wrapper
-        if instruction and instruction.strip():
-             user_prompt = f"{instruction.strip()}\n\n{SINGLE_QUESTION_WRAPPER}"
+        # Instruction-aware prompt; if instruction missing, use intent fallback goal
+        trimmed = (instruction or "").strip()
+        if trimmed:
+            user_prompt = f"{trimmed}\n\n{SINGLE_QUESTION_WRAPPER}"
+        else:
+            goal = INTENT_GOALS.get(intent, "")
+            # Only apply fallback single-question shaping when the intent is not a terminal close
+            if goal and intent != INT_CLOSE_AND_VERIFY_SELF:
+                user_prompt = f"{goal}\n\n{SINGLE_QUESTION_WRAPPER}"
+                try:
+                    log(event="responder_instruction_fallback",
+                        intent=intent, used_goal=True)
+                except Exception:
+                    pass
+            else:
+                # No instruction and no applicable goal → keep safe template reply
+                return reply
 
         out = chat_completion(agent_rules, user_prompt, temperature=0.2, max_tokens=70)
         out = (out or "").strip()
         # Strip list markers to reduce accidental procedural formats before limit
-        out = re.sub(r"(?m)^\s*(?:\d+\.|[-*•])\s+", "", out)
+        out = re.sub(r"(?m)^\s*(?:\d+\.\s*|[-*•]\s+)", "", out)
         out = _limit_sentences(out, max_sentences)
         if (not out
             or _contains_forbidden(out)
@@ -259,6 +287,13 @@ def generate_agent_reply(req, session, intent: str, instruction: Optional[str] =
             or _looks_procedural(out)
         ):
             raise ValueError("unsafe_rephrase")
+        try:
+            log(event="responder_rephrase_applied",
+                intent=intent,
+                had_instruction=bool(trimmed),
+                used_fallback_goal=bool(not trimmed))
+        except Exception:
+            pass
         return out
     except Exception:
         log(event="responder_fallback", intent=intent)

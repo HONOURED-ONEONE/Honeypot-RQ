@@ -34,6 +34,11 @@ def health():
 # Optional: log a minimal boot snapshot (stdout)
 try:
     im = snapshot_intent_map()
-    print(f"[boot] BF_LLM_REPHRASE={settings.BF_LLM_REPHRASE} | intent_map_keys={len(im)}")
+    count = len(im)
+    print(f"[boot] BF_LLM_REPHRASE={settings.BF_LLM_REPHRASE} intent_map_keys={count}")
+    if settings.BF_LLM_REPHRASE and count == 0:
+        # Surface a clear signal when rephrase is on but instruction map is empty
+        print("[boot][WARN] BF_LLM_REPHRASE is true but the intent-map is empty. "
+              "Responder will fall back to internal goals until instructions are seeded.")
 except Exception:
     pass

@@ -2,6 +2,7 @@ import re
 import unicodedata
 from urllib.parse import urlparse
 from typing import List, Dict
+from app.intel.artifact_registry import normalize_url  # unify URL normalization
 
 # ---------------------------
 # Normalization utilities
@@ -67,9 +68,7 @@ EMAIL_RE = re.compile(
 )
 
 # URL: basic http(s) with conservative terminators; avoid trailing punctuation and unmatched brackets.
-URL_RE = re.compile(
-    r'''\bhttps?://[^\s<>()\[\]{}"'|\\^`]+''', re.I
-)
+URL_RE = re.compile(r"""\bhttps?://[^\s<>()\[\]{}"'\\^`]+""", re.I)
 
 # UPI: <handle> @<psp>. Allow dots/underscores/dashes in handle, lowercase PSP alpha.
 # Also catch spaced or dotted obfuscations we normalized (e.g., "id @ paytm").
@@ -175,8 +174,7 @@ def extract_all(text: str) -> Dict[str, List[str]]:
     # URLs
     urls = []
     for u in URL_RE.findall(t):
-        # trim trailing punctuation commonly stuck to URLs
-        u = u.rstrip(').,;!?\'"[]{}')
+        u = normalize_url(u)
         if valid_url(u):
             urls.append(u)
     urls = sorted(set(urls))
@@ -197,7 +195,8 @@ def extract_all(text: str) -> Dict[str, List[str]]:
     # but also ensure we didn't already capture it.
     for m in ACCT_RE_FALLBACK.finditer(t):
         cand = m.group(1)
-        if cand not in accts and is_plausible_account(cand):
+        # Exclude mobiles from fallback: if it formats/validates as a mobile, do not treat as account
+        if cand not in accts and is_plausible_account(cand) and not is_valid_phone(cand):
             accts.append(cand)
     # Normalize to digit-only strings to avoid stray separators
     accts = sorted(set(_only_digits(a) for a in accts if is_plausible_account(a)))
