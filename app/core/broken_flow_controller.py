@@ -13,6 +13,7 @@ from app.store.models import SessionState
 from app.core.finalize import should_finalize
 from app.intel.artifact_registry import artifact_registry
 from app.settings import settings as default_settings
+from app.core.investigative_ladder import choose_ladder_target
 import hashlib
 import json
 
@@ -273,6 +274,7 @@ def choose_next_action(
     intel_dict: Dict[str, Any],
     detection_dict: Dict[str, Any],
     settings: Any,
+    red_flag: str = "NONE",
 ) -> Dict[str, Any]:
 
     if settings is None or isinstance(settings, dict):
@@ -336,14 +338,14 @@ def choose_next_action(
         pass
 
     new_signature = compute_ioc_signature(intel_dict)
-    new_intel_received = False
-
-    if session.bf_last_ioc_signature is None:
-        session.bf_last_ioc_signature = new_signature
-        if any(intel_dict.get(k) for k in artifact_registry.artifacts.keys()):
-            new_intel_received = True
-    elif new_signature != session.bf_last_ioc_signature:
-        new_intel_received = True
+    # Correct definition: "new intel" iff signature changed since last turn.
+    # Do NOT treat "any existing intel" as new every turn, or no-progress never triggers.
+    prev_sig = getattr(session, "bf_last_ioc_signature", None)
+    if not prev_sig:
+        prev_sig = new_signature
+        session.bf_last_ioc_signature = prev_sig
+    new_intel_received = (new_signature != prev_sig)
+    if new_intel_received:
         session.bf_no_progress_count = 0
         session.bf_last_ioc_signature = new_signature
     else:
@@ -353,6 +355,49 @@ def choose_next_action(
     target_key = None
     force_finalize = False
     reason = "normal_flow"
+
+    # ------------------------------------------------------------
+    # Anti-redundancy helpers (category cooldown + satisfied guard)
+    # ------------------------------------------------------------
+    def _has_vals(key: str) -> bool:
+        try:
+            vals = intel_dict.get(key) or []
+            return isinstance(vals, list) and len(vals) > 0
+        except Exception:
+            return False
+
+    def _asked_map() -> Dict[str, int]:
+        try:
+            return getattr(session, "askedArtifactLastTurn", {}) or {}
+        except Exception:
+            return {}
+
+    def _avoid_keys() -> List[str]:
+        try:
+            return list(getattr(session, "lastNewIocKeys", []) or [])
+        except Exception:
+            return []
+
+    def _cooldown_block(key: str, window_turns: int = 4) -> bool:
+        """
+        Prevent repeatedly asking the same category too soon.
+        window_turns counts in session.turnIndex units (which includes both sides).
+        """
+        try:
+            last_map = getattr(session, "askedArtifactLastTurn", {}) or {}
+            last = int(last_map.get(key, -10**9))
+            now = int(getattr(session, "turnIndex", 0) or 0)
+            return (now - last) < int(window_turns)
+        except Exception:
+            return False
+
+    def _mark_asked(key: str) -> None:
+        try:
+            m = dict(getattr(session, "askedArtifactLastTurn", {}) or {})
+            m[key] = int(getattr(session, "turnIndex", 0) or 0)
+            session.askedArtifactLastTurn = m
+        except Exception:
+            pass
 
     # ------------------------------------------------------------
     # State Advancement via Intel
@@ -391,16 +436,89 @@ def choose_next_action(
     # ------------------------------------------------------------
 
     if session.bf_state == BF_S0:
+        # Start with an investigative move anchored to the most obvious red-flag
         session.bf_state = BF_S1
-        intent = INT_ACK_CONCERN
+        if (red_flag or "").upper() == "OTP_REQUEST":
+            intent = INT_REFUSE_SENSITIVE_ONCE
+        elif (red_flag or "").upper() == "SUSPICIOUS_LINK":
+            intent = INT_ASK_OFFICIAL_WEBSITE
+        elif (red_flag or "").upper() == "THREAT_PRESSURE":
+            intent = INT_ASK_TICKET_REF
+        elif (red_flag or "").upper() == "IMPERSONATION_CLAIM":
+            intent = INT_ASK_DEPARTMENT_BRANCH
+        elif (red_flag or "").upper() == "PAYMENT_REQUEST":
+            intent = INT_ASK_ALT_VERIFICATION
+        else:
+            # Default: ask for official helpline to verify identity
+            intent = INT_ASK_OFFICIAL_HELPLINE
     elif session.bf_state == BF_S1:
-        intent = INT_ACK_CONCERN
-    elif session.bf_state in (BF_S2, BF_S3, BF_S4):
-        intent, target_key = _pick_missing_intel_target(
-            intel_dict,
-            session.bf_recent_intents,
-            session.scam_type,
+        # Scoring-optimized: use investigative ladder for variety + relevance. [1](https://kcetvnrorg-my.sharepoint.com/personal/24ucs160_kamarajengg_edu_in/Documents/Microsoft%20Copilot%20Chat%20Files/logs.txt)[2](https://kcetvnrorg-my.sharepoint.com/personal/24ucs160_kamarajengg_edu_in/Documents/Microsoft%20Copilot%20Chat%20Files/logs.1771597261347.log)
+        ladder_key = choose_ladder_target(
+            intel_dict=intel_dict,
+            scam_type=session.scam_type,
+            asked_last_turn=_asked_map(),
+            turn_index=int(getattr(session, "turnIndex", 0) or 0),
+            cooldown_turns=4,
+            avoid_keys=_avoid_keys(),
         )
+        session.lastLadderTarget = ladder_key
+        if ladder_key == "department":
+            intent, target_key = INT_ASK_DEPARTMENT_BRANCH, None
+        elif ladder_key == "phoneNumbers":
+            intent, target_key = INT_ASK_OFFICIAL_HELPLINE, "phoneNumbers"
+        elif ladder_key == "phishingLinks":
+            intent, target_key = INT_ASK_OFFICIAL_WEBSITE, "phishingLinks"
+        elif ladder_key == "upiIds":
+            intent, target_key = INT_ASK_ALT_VERIFICATION, "upiIds"
+        elif ladder_key == "emailAddresses":
+            # No dedicated intent exists; domain/site verification is the closest safe surface.
+            intent, target_key = INT_ASK_OFFICIAL_WEBSITE, "emailAddresses"
+        elif ladder_key == "caseIds":
+            intent, target_key = INT_ASK_TICKET_REF, "caseIds"
+        elif ladder_key == "policyNumbers":
+            intent, target_key = INT_ASK_TICKET_REF, "policyNumbers"
+        elif ladder_key == "orderNumbers":
+            intent, target_key = INT_ASK_TICKET_REF, "orderNumbers"
+        else:
+            # Fallback to existing missing-intel selector
+            intent, target_key = _pick_missing_intel_target(
+                intel_dict,
+                session.bf_recent_intents,
+                session.scam_type,
+            )
+    elif session.bf_state in (BF_S2, BF_S3, BF_S4):
+        # Use ladder in deeper states too, to avoid repetitive cycles and keep engagement varied. [1](https://kcetvnrorg-my.sharepoint.com/personal/24ucs160_kamarajengg_edu_in/Documents/Microsoft%20Copilot%20Chat%20Files/logs.txt)[2](https://kcetvnrorg-my.sharepoint.com/personal/24ucs160_kamarajengg_edu_in/Documents/Microsoft%20Copilot%20Chat%20Files/logs.1771597261347.log)
+        ladder_key = choose_ladder_target(
+            intel_dict=intel_dict,
+            scam_type=session.scam_type,
+            asked_last_turn=_asked_map(),
+            turn_index=int(getattr(session, "turnIndex", 0) or 0),
+            cooldown_turns=4,
+            avoid_keys=_avoid_keys(),
+        )
+        session.lastLadderTarget = ladder_key
+        if ladder_key == "department":
+            intent, target_key = INT_ASK_DEPARTMENT_BRANCH, None
+        elif ladder_key == "phoneNumbers":
+            intent, target_key = INT_ASK_OFFICIAL_HELPLINE, "phoneNumbers"
+        elif ladder_key == "phishingLinks":
+            intent, target_key = INT_ASK_OFFICIAL_WEBSITE, "phishingLinks"
+        elif ladder_key == "upiIds":
+            intent, target_key = INT_ASK_ALT_VERIFICATION, "upiIds"
+        elif ladder_key == "emailAddresses":
+            intent, target_key = INT_ASK_OFFICIAL_WEBSITE, "emailAddresses"
+        elif ladder_key == "caseIds":
+            intent, target_key = INT_ASK_TICKET_REF, "caseIds"
+        elif ladder_key == "policyNumbers":
+            intent, target_key = INT_ASK_TICKET_REF, "policyNumbers"
+        elif ladder_key == "orderNumbers":
+            intent, target_key = INT_ASK_TICKET_REF, "orderNumbers"
+        else:
+            intent, target_key = _pick_missing_intel_target(
+                intel_dict,
+                session.bf_recent_intents,
+                session.scam_type,
+            )
 
         # Progression once some intel exists
         got_phone = bool(intel_dict.get("phoneNumbers"))
@@ -540,6 +658,32 @@ def choose_next_action(
         intent = _constrain(intent)
 
     # ------------------------------------------------------------
+    # Anti-redundancy: satisfied-category guard (pivot away)
+    # ------------------------------------------------------------
+    if intent == INT_ASK_OFFICIAL_HELPLINE and _has_vals("phoneNumbers"):
+        intent, target_key = _pivot_intent(intel_dict, session.bf_recent_intents, intent, session.scam_type)
+        reason = "satisfied_guard_pivot_phone"
+    if intent == INT_ASK_OFFICIAL_WEBSITE and _has_vals("phishingLinks"):
+        intent, target_key = _pivot_intent(intel_dict, session.bf_recent_intents, intent, session.scam_type)
+        reason = "satisfied_guard_pivot_link"
+    if intent == INT_ASK_TICKET_REF and _has_vals("caseIds"):
+        intent, target_key = _pivot_intent(intel_dict, session.bf_recent_intents, intent, session.scam_type)
+        reason = "satisfied_guard_pivot_case"
+
+    # ------------------------------------------------------------
+    # Anti-redundancy: category cooldown (avoid asking same target_key too soon)
+    # ------------------------------------------------------------
+    if target_key and _cooldown_block(target_key, window_turns=4):
+        intent, target_key = _pivot_intent(intel_dict, session.bf_recent_intents, intent, session.scam_type)
+        reason = "category_cooldown_pivot"
+
+    # Record the asked category for future cooldown checks
+    if target_key:
+        _mark_asked(target_key)
+    elif intent == INT_ASK_DEPARTMENT_BRANCH:
+        _mark_asked("department")
+
+    # ------------------------------------------------------------
 
     # Resolve a broad instruction for the responder
     instruction = _instruction_for(intent, target_key)
@@ -555,4 +699,5 @@ def choose_next_action(
         "force_finalize": force_finalize,
         "scam_type": session.scam_type,
         "instruction": instruction,
+        "target_key": target_key,
     }

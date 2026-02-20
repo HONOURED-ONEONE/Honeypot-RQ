@@ -20,9 +20,12 @@ from app.observability.logging import log
 
 from app.settings import settings
 from app.core.guvi_callback import enqueue_guvi_final_result # ✅ NEW
-from app.intel.extractor import update_intelligence_from_text  # ✅ P0.1: registry-driven extraction
-from app.core.guarded_config import begin_session_overlay, end_session_overlay  # ✅ NEW (session-scoped config)
+from app.intel.extractor import update_intelligence_from_text # ✅ P0.1: registry-driven extraction
+from app.core.guarded_config import begin_session_overlay, end_session_overlay # ✅ NEW (session-scoped config)
 from app.intel.artifact_registry import get_intent_instruction
+from app.core.red_flags import choose_red_flag
+import re
+import hashlib
 from datetime import datetime
 
 
@@ -115,7 +118,45 @@ def handle_event(req):
     #    - Optionally catch up on a small recent window of conversationHistory
     latest_text = req.message.text or ""
     if latest_text:
-        update_intelligence_from_text(session, latest_text)
+        # --- Adaptive ladder: snapshot IOC counts before extraction ---
+            try:
+                intel0 = session.extractedIntelligence
+                before = {
+                    "phoneNumbers": len(getattr(intel0, "phoneNumbers", []) or []),
+                    "phishingLinks": len(getattr(intel0, "phishingLinks", []) or []),
+                    "upiIds": len(getattr(intel0, "upiIds", []) or []),
+                    "bankAccounts": len(getattr(intel0, "bankAccounts", []) or []),
+                    "emailAddresses": len(getattr(intel0, "emailAddresses", []) or []),
+                    "caseIds": len(getattr(intel0, "caseIds", []) or []),
+                    "policyNumbers": len(getattr(intel0, "policyNumbers", []) or []),
+                    "orderNumbers": len(getattr(intel0, "orderNumbers", []) or []),
+                }
+            except Exception:
+                before = {}
+    
+            update_intelligence_from_text(session, latest_text)
+    
+            # --- Adaptive ladder: compute which IOC keys grew this turn ---
+            try:
+                intel1 = session.extractedIntelligence
+                after = {
+                    "phoneNumbers": len(getattr(intel1, "phoneNumbers", []) or []),
+                    "phishingLinks": len(getattr(intel1, "phishingLinks", []) or []),
+                    "upiIds": len(getattr(intel1, "upiIds", []) or []),
+                    "bankAccounts": len(getattr(intel1, "bankAccounts", []) or []),
+                    "emailAddresses": len(getattr(intel1, "emailAddresses", []) or []),
+                    "caseIds": len(getattr(intel1, "caseIds", []) or []),
+                    "policyNumbers": len(getattr(intel1, "policyNumbers", []) or []),
+                    "orderNumbers": len(getattr(intel1, "orderNumbers", []) or []),
+                }
+                new_keys = []
+                for k, a in after.items():
+                    b = int(before.get(k, 0) or 0)
+                    if int(a or 0) > b:
+                        new_keys.append(k)
+                session.lastNewIocKeys = new_keys[:8]
+            except Exception:
+                session.lastNewIocKeys = []
     try:
         history = getattr(req, "conversationHistory", None) or []
         for m in history[-6:]:
@@ -142,17 +183,30 @@ def handle_event(req):
     except Exception:
         intel_dict = session.extractedIntelligence.__dict__
 
+    # --- Red-flag tagger (deterministic, per latest scammer message) ---
+    # Store on session for rotation and for debugging/observability.
+    try:
+        rf = choose_red_flag(latest_text, getattr(session, "redFlagHistory", []) or [])
+        session.lastRedFlagTag = rf.tag
+        hist = list(getattr(session, "redFlagHistory", []) or [])
+        hist.append(rf.tag)
+        session.redFlagHistory = hist[-10:]
+    except Exception:
+        rf = None
+
     controller_out = choose_next_action(
         session=session,
         latest_text=req.message.text or "",
         intel_dict=intel_dict,
         detection_dict=req.detection or {}, # ✅ detection is dict per schema
         settings=settings,
+        red_flag=(rf.tag if rf else "NONE"),
     )
 
     intent = controller_out.get("intent")
     bf_state = controller_out.get("bf_state")
     force_finalize = controller_out.get("force_finalize", False)
+    target_key = controller_out.get("target_key")
     # Prefer the controller's reason when it asserts finalize; only fallback otherwise
     if force_finalize:
         finalize_reason = controller_out.get("reason") or "controller_finalize"
@@ -185,7 +239,9 @@ def handle_event(req):
     try:
         session.bf_last_intent = intent
         recent = list(getattr(session, "bf_recent_intents", []) or [])
-        recent.append(intent)
+        # Avoid back-to-back duplicates; duplicates distort cooldown windows.
+        if not recent or recent[-1] != intent:
+            recent.append(intent)
         # keep only the last 10 to cap memory
         session.bf_recent_intents = recent[-10:]
     except Exception:
@@ -199,7 +255,66 @@ def handle_event(req):
         session=session,
         intent=intent,
         instruction=instruction,
+        red_flag_prefix=(rf.prefix if rf else ""),
     )
+
+    # ------------------------------------------------------------
+    # Anti-redundancy: reply similarity guard (one retry pivot)
+    # ------------------------------------------------------------
+    def _fingerprint(text: str) -> str:
+        t = (text or "").lower()
+        t = re.sub(r"[^a-z0-9\s?]", " ", t)
+        t = re.sub(r"\s+", " ", t).strip()
+        return hashlib.md5(t.encode("utf-8")).hexdigest()
+
+    try:
+        fp = _fingerprint(reply_text)
+        recent_fps = list(getattr(session, "recentAgentReplyFingerprints", []) or [])
+        # If we've used this fingerprint very recently, pivot once.
+        if fp in recent_fps[-3:]:
+            controller_out2 = choose_next_action(
+                session=session,
+                latest_text=req.message.text or "",
+                intel_dict=intel_dict,
+                detection_dict=req.detection or {},
+                settings=settings,
+                red_flag=(rf.tag if rf else "NONE"),
+            )
+            intent2 = controller_out2.get("intent")
+            # If controller gave us the same intent again, force a pivot by adding it to recent intents
+            if intent2 == intent:
+                # simulate avoidance: extend recent intent history temporarily and re-choose
+                tmp_recent = list(getattr(session, "bf_recent_intents", []) or [])
+                tmp_recent.append(intent)
+                session.bf_recent_intents = tmp_recent[-10:]
+                controller_out2 = choose_next_action(
+                    session=session,
+                    latest_text=req.message.text or "",
+                    intel_dict=intel_dict,
+                    detection_dict=req.detection or {},
+                    settings=settings,
+                    red_flag=(rf.tag if rf else "NONE"),
+                )
+                intent2 = controller_out2.get("intent")
+            instruction2 = controller_out2.get("instruction") or instruction
+            reply_text2 = generate_agent_reply(
+                req=req,
+                session=session,
+                intent=intent2,
+                instruction=instruction2,
+                red_flag_prefix=(rf.prefix if rf else ""),
+            )
+            fp2 = _fingerprint(reply_text2)
+            # Accept the retry if it differs; otherwise keep original
+            if fp2 != fp:
+                intent = intent2
+                reply_text = reply_text2
+                fp = fp2
+        # Update fingerprint history
+        recent_fps.append(fp)
+        session.recentAgentReplyFingerprints = recent_fps[-10:]
+    except Exception:
+        pass
 
     # ✅ P0.3: Persist the agent reply and increment counters
     try:

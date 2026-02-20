@@ -60,6 +60,30 @@ class SessionState:
     bf_recent_intents: List[str] = field(default_factory=list)
     bf_fallback_used: bool = False
 
+    # --- Red-flag state (Conversation Quality support) ---
+    # lastRedFlagTag: single chosen tag for the latest scammer message
+    # redFlagHistory: rolling history to enable rotation and reduce redundant flags
+    lastRedFlagTag: Optional[str] = None
+    redFlagHistory: List[str] = field(default_factory=list)
+
+    # --- Anti-redundancy state (Conversation Quality support) ---
+    # Track when an IOC category was last asked, to prevent repeated questions.
+    # key: artifact category (e.g., "phoneNumbers"), value: last turnIndex when asked
+    askedArtifactLastTurn: Dict[str, int] = field(default_factory=dict)
+
+    # Keep a small rolling window of recent agent reply fingerprints to avoid repeating
+    # nearly identical responses across turns.
+    recentAgentReplyFingerprints: List[str] = field(default_factory=list)
+
+    # --- Investigative Ladder state (debug/observability) ---
+    # lastLadderTarget: last chosen ladder key (e.g., "phoneNumbers", "phishingLinks", "department")
+    lastLadderTarget: Optional[str] = None
+
+    # --- Adaptive ladder support ---
+    # Keys (IOC categories) that were newly added/expanded in the latest processed scammer message.
+    # Used to avoid immediately asking for the same category next turn (timing/state sync redundancy).
+    lastNewIocKeys: List[str] = field(default_factory=list)
+
     def __post_init__(self):
         """
         Keep counters consistent:
