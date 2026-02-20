@@ -16,7 +16,7 @@ import re
 import logging
 from typing import List, Dict, Optional
 from pathlib import Path
-
+from functools import lru_cache
 from app.settings import settings
 from app.llm.vllm_client import chat_completion
 from app.core.broken_flow_constants import *
@@ -50,6 +50,85 @@ def _load_file_text(rel_path: str) -> str:
         return (base / rel_path).read_text(encoding="utf-8")
     except Exception:
         return ""
+
+# ---------------------------------------------------------------------------
+# Prompt pack wiring: agent_system.txt + examples.txt (few-shot)
+# ---------------------------------------------------------------------------
+@lru_cache(maxsize=4)
+def _agent_system_prompt() -> str:
+    """
+    Load the long-form system prompt used for BF_LLM_REPHRASE generation.
+    Falls back to empty string if not found.
+    """
+    return (_load_file_text("agent_system.txt") or "").strip()
+
+@lru_cache(maxsize=4)
+def _examples_text() -> str:
+    """
+    Load examples.txt. Expected format:
+      [INTENT=INT_ASK_OFFICIAL_HELPLINE]
+      <example line>
+    """
+    return (_load_file_text("examples.txt") or "").strip()
+
+def _parse_examples(raw: str) -> Dict[str, List[str]]:
+    """
+    Parse examples into {INTENT: [example_str, ...]}.
+    Best-effort:
+    - Preferred: blocks starting with [INTENT=...]
+    - Fallback: treat each non-empty line as a generic example under key "*"
+    """
+    out: Dict[str, List[str]] = {}
+    if not raw:
+        return out
+    lines = [ln.rstrip() for ln in raw.splitlines()]
+    current = None
+    buf: List[str] = []
+    def flush():
+        nonlocal buf, current
+        if current and buf:
+            ex = " ".join([x.strip() for x in buf if x.strip()]).strip()
+            if ex:
+                out.setdefault(current, []).append(ex)
+        buf = []
+    for ln in lines:
+        s = ln.strip()
+        if not s:
+            continue
+        m = re.match(r"^\[INTENT\s*=\s*([A-Z0-9_]+)\]\s*$", s)
+        if m:
+            flush()
+            current = m.group(1).strip()
+            continue
+        if s.startswith("#"):
+            continue
+        if current:
+            buf.append(s)
+        else:
+            out.setdefault("*", []).append(s)
+    flush()
+    return out
+
+@lru_cache(maxsize=8)
+def _examples_map() -> Dict[str, List[str]]:
+    return _parse_examples(_examples_text())
+
+def _select_examples(intent: str, k: int = 3) -> List[str]:
+    """
+    Select up to k examples for the given intent.
+    Falls back to "*" generic examples if intent-specific ones are unavailable.
+    """
+    mp = _examples_map() or {}
+    intent_key = (intent or "").strip()
+    candidates = mp.get(intent_key, []) or []
+    if not candidates:
+        candidates = mp.get("*", []) or []
+    if not candidates:
+        return []
+    if len(candidates) <= k:
+        return candidates
+    start = random.randint(0, max(0, len(candidates) - k))
+    return candidates[start:start + k]
 
 # ---------------------------------------------------------------------------
 # Templates (intent-driven only; no tactics, no procedures). Updated with subtle red-flag references.
@@ -192,6 +271,39 @@ VAGUE_QUESTION_PATTERNS = [
     r"\bcan you confirm\b",
 ]
 
+# Block "trusted source / official channel" questions.
+# These tend to loop and are not tied to a scoreable IOC category (phone/link/ID/etc.). [1](https://kcetvnrorg-my.sharepoint.com/personal/24ucs160_kamarajengg_edu_in/Documents/Microsoft%20Copilot%20Chat%20Files/honoured-oneone-honeypot-rq-8a5edab282632443-2.txt)
+TRUST_SOURCE_PATTERNS = [
+    r"\btrusted source\b",
+    r"\bofficial channel\b",
+    r"\bunknown source\b",
+    r"\bis this (really )?official\b",
+    r"\bofficial alert\b",
+    r"\bcoming from (a|an) (official|trusted)\b",
+    r"\bcan i trust\b",
+]
+
+# Block open-ended "meta analysis" questions that don't elicit IOCs.
+META_ANALYSIS_PATTERNS = [
+    r"\bconcrete evidence\b",
+    r"\bevidence\b",
+    r"\binappropriate\b",
+    r"\bseems inappropriate\b",
+    r"\bdoes this urgency\b",
+]
+
+# Token sets used to enforce "single artifact target" per question.
+# If a question hits 2+ sets, it likely asks for multiple artifacts in one question (e.g., "phone or email").
+TARGET_TOKEN_SETS: Dict[str, List[str]] = {
+    "phoneNumbers": ["helpline", "phone", "number", "call"],
+    "emailAddresses": ["email", "mail", "e-mail"],
+    "phishingLinks": ["website", "domain", "site", "link", "portal"],
+    "caseIds": ["reference", "ref", "ticket", "case", "complaint", "id"],
+    "department": ["department", "branch", "office", "team"],
+    "upiIds": ["upi", "vpa", "handle", " @"],
+    "bankAccounts": ["account", "a/c", "acct"],
+}
+
 # Per-intent "anchor terms" to make investigative questions clearly relevant.
 # These ensure the question explicitly targets the intended artifact category,
 # improving "Relevant Questions" scoring. [2](https://kcetvnrorg-my.sharepoint.com/personal/24ucs160_kamarajengg_edu_in/Documents/Microsoft%20Copilot%20Chat%20Files/logs.txt)
@@ -200,7 +312,9 @@ INTENT_REQUIRED_TERMS: Dict[str, List[str]] = {
     INT_ASK_OFFICIAL_WEBSITE: ["website", "domain", "site"],
     INT_ASK_TICKET_REF: ["reference", "ref", "ticket", "case", "complaint", "id"],
     INT_ASK_DEPARTMENT_BRANCH: ["department", "branch", "office", "team"],
-    INT_ASK_ALT_VERIFICATION: ["alternative", "another", "official", "method", "verify"],
+    # Tighten ALT_VERIFICATION anchors: avoid overly-broad terms like "official" that can allow "is this official?"
+    # Keep it focused on "alternate method/option" phrasing.
+    INT_ASK_ALT_VERIFICATION: ["alternative", "alternate", "another", "different", "method", "option"],
     INT_REFUSE_SENSITIVE_ONCE: ["official", "verify", "channel"],
     INT_CHANNEL_FAIL: ["official", "website", "domain", "site"],
     INT_SECONDARY_FAIL: ["official", "another", "option", "channel"],
@@ -215,6 +329,30 @@ def _looks_vague_or_meta_question(s: str) -> bool:
     if "?" not in t:
         return False
     return any(re.search(p, t, re.I) for p in VAGUE_QUESTION_PATTERNS)
+
+def _looks_trust_source_question(s: str) -> bool:
+    t = (s or "").lower()
+    if "?" not in t:
+        return False
+    return any(re.search(p, t, re.I) for p in TRUST_SOURCE_PATTERNS)
+
+def _looks_meta_analysis_question(s: str) -> bool:
+    t = (s or "").lower()
+    if "?" not in t:
+        return False
+    return any(re.search(p, t, re.I) for p in META_ANALYSIS_PATTERNS)
+
+def _count_target_sets_hit(s: str) -> int:
+    t = (s or "").lower()
+    hits = 0
+    for _, toks in TARGET_TOKEN_SETS.items():
+        if any(tok in t for tok in toks):
+            hits += 1
+    return hits
+
+def _violates_single_artifact(s: str) -> bool:
+    # 2+ target set hits means the question likely asks for multiple artifacts at once.
+    return _count_target_sets_hit(s) >= 2
 
 def _meets_intent_anchor(intent: str, s: str) -> bool:
     """
@@ -329,6 +467,18 @@ def generate_agent_reply(
     if _looks_vague_or_meta_question(reply):
         reply = _safe_fallback(intent)
 
+    # Wording constraint 1b: block "trusted source / official channel" meta questions
+    if _looks_trust_source_question(reply):
+        reply = _safe_fallback(intent)
+
+    # Wording constraint 1c: block open-ended meta-analysis questions
+    if _looks_meta_analysis_question(reply):
+        reply = _safe_fallback(intent)
+
+    # Wording constraint 1d: enforce single-artifact target per question
+    if intent != INT_CLOSE_AND_VERIFY_SELF and "?" in (reply or "") and _violates_single_artifact(reply):
+        reply = _safe_fallback(intent)
+
     # Wording constraint 2: ensure question is anchored to the intent category
     if intent != INT_CLOSE_AND_VERIFY_SELF and "?" in (reply or "") and not _meets_intent_anchor(intent, reply):
         reply = _safe_fallback(intent)
@@ -343,69 +493,152 @@ def generate_agent_reply(
 
     # Optional LLM rephrase (strictly bounded)
     try:
-        # Stricter system rules (non-negotiables) to prevent procedure/coaching
-        agent_rules = (
-            "You generate short, cautious replies for verification.\n"
-            "NON-NEGOTIABLES:\n"
-            "- Follow the given instruction strictly (no new goals).\n"
-            "- NO procedures, steps, or instructions.\n"
-            "- At most ONE question.\n"
-            "- Do NOT invent or mention any identifiers.\n"
-            "- Keep it concise (max 2–3 sentences based on intent).\n"
-            "- Do NOT imply resolution or closure unless told.\n"
-            "- Do NOT ask vague meta questions (e.g., 'can I assist' / 'which aspect first').\n"
-            "- The single question MUST be investigative and match the intent’s target.\n"
-        )
-        
-        # Instruction-aware prompt; if instruction missing, use intent fallback goal
+        # --- Rephrase telemetry: count attempts ---
+        try:
+            session.rephraseAttempts = int(getattr(session, "rephraseAttempts", 0) or 0) + 1
+        except Exception:
+            pass
+
+        # System prompt pack (preferred): app/llm/prompts/agent_system.txt
+        # Fallback: inline rules if file missing.
+        system_prompt = _agent_system_prompt()
+        if not system_prompt:
+            system_prompt = (
+                "You generate short, cautious replies for verification.\n"
+                "NON-NEGOTIABLES:\n"
+                "- Follow the given instruction strictly (no new goals).\n"
+                "- NO procedures, steps, or instructions.\n"
+                "- At most ONE question.\n"
+                "- Do NOT invent or mention any identifiers.\n"
+                "- Keep it concise (max 2–3 sentences based on intent).\n"
+                "- Do NOT imply resolution or closure unless told.\n"
+                "- Do NOT ask vague meta questions.\n"
+                "- The single question MUST be investigative and match the intent’s target.\n"
+            )
+
         trimmed = (instruction or "").strip()
         pfx = (red_flag_prefix or "").strip()
+
+        # Few-shot examples (optional)
+        exs = _select_examples(intent, k=3)
+        ex_block = ""
+        if exs:
+            ex_lines = "\n".join([f"- {e}" for e in exs])
+            ex_block = f"EXAMPLES (follow the same format):\n{ex_lines}\n\n"
+
+        # Build a structured user prompt to reduce drift and improve validity.
         if trimmed:
-            if pfx:
-                user_prompt = f"{pfx}\n{trimmed}\n\n{SINGLE_QUESTION_WRAPPER}"
-            else:
-                user_prompt = f"{trimmed}\n\n{SINGLE_QUESTION_WRAPPER}"
+            core = (
+                f"RED_FLAG_PREFIX: {pfx}\n"
+                f"INTENT: {intent}\n"
+                f"INSTRUCTION: {trimmed}\n\n"
+                f"{SINGLE_QUESTION_WRAPPER}"
+            )
+            user_prompt = ex_block + core
         else:
             goal = INTENT_GOALS.get(intent, "")
-            # Only apply fallback single-question shaping when the intent is not a terminal close
             if goal and intent != INT_CLOSE_AND_VERIFY_SELF:
-                if pfx:
-                    user_prompt = f"{pfx}\n{goal}\n\n{SINGLE_QUESTION_WRAPPER}"
-                else:
-                    user_prompt = f"{goal}\n\n{SINGLE_QUESTION_WRAPPER}"
+                core = (
+                    f"RED_FLAG_PREFIX: {pfx}\n"
+                    f"INTENT: {intent}\n"
+                    f"GOAL: {goal}\n\n"
+                    f"{SINGLE_QUESTION_WRAPPER}"
+                )
+                user_prompt = ex_block + core
                 try:
-                    log(event="responder_instruction_fallback",
-                        intent=intent, used_goal=True)
+                    log(event="responder_instruction_fallback", intent=intent, used_goal=True)
                 except Exception:
                     pass
             else:
-                # No instruction and no applicable goal → keep safe template reply
                 return reply
 
-        out = chat_completion(agent_rules, user_prompt, temperature=0.2, max_tokens=70)
+        out = chat_completion(system_prompt, user_prompt, temperature=0.2, max_tokens=70)
         out = (out or "").strip()
         # Strip list markers to reduce accidental procedural formats before limit
         out = re.sub(r"(?m)^\s*(?:\d+\.\s*|[-*•]\s+)", "", out)
         out = _limit_sentences(out, max_sentences)
-        if (not out
-            or _contains_forbidden(out)
-            or _contains_meta_confirm(out)
-            or _count_questions(out) > 1
-            or _introduces_new_identifier(out, session)
-            or _looks_procedural(out)
-            or _looks_vague_or_meta_question(out)
-            or (intent != INT_CLOSE_AND_VERIFY_SELF and "?" in (out or "") and not _meets_intent_anchor(intent, out))
-        ):
-            raise ValueError("unsafe_rephrase")
+        
+        # --- Rephrase validation with reason capture (telemetry) ---
+        reject_reason = None
+        if not out:
+            reject_reason = "empty"
+        elif _contains_forbidden(out):
+            reject_reason = "forbidden_terms"
+        elif _contains_meta_confirm(out):
+            reject_reason = "meta_confirm"
+        elif _count_questions(out) > 1:
+            reject_reason = "multi_question"
+        elif _introduces_new_identifier(out, session):
+            reject_reason = "new_identifier"
+        elif _looks_procedural(out):
+            reject_reason = "procedural"
+        elif _looks_vague_or_meta_question(out):
+            reject_reason = "vague_meta"
+        elif _looks_trust_source_question(out):
+            reject_reason = "trust_source"
+        elif _looks_meta_analysis_question(out):
+            reject_reason = "meta_analysis"
+        elif (intent != INT_CLOSE_AND_VERIFY_SELF and "?" in out and _violates_single_artifact(out)):
+            reject_reason = "multi_artifact"
+        elif (intent != INT_CLOSE_AND_VERIFY_SELF and "?" in out and not _meets_intent_anchor(intent, out)):
+            reject_reason = "anchor_miss"
+
+        if reject_reason:
+            try:
+                session.rephraseRejected = int(getattr(session, "rephraseRejected", 0) or 0) + 1
+                session.lastRephraseRejectReason = str(reject_reason)
+            except Exception:
+                pass
+            raise ValueError(f"unsafe_rephrase:{reject_reason}")
+
+        # Accept rephrase
         try:
-            log(event="responder_rephrase_applied",
-                intent=intent,
-                had_instruction=bool(trimmed),
-                used_fallback_goal=bool(not trimmed))
+            session.rephraseApplied = int(getattr(session, "rephraseApplied", 0) or 0) + 1
+            session.lastRephraseRejectReason = None
         except Exception:
             pass
+
+        # Log cumulative acceptance rate (non-influential)
+        try:
+            a = int(getattr(session, "rephraseAttempts", 0) or 0)
+            ok = int(getattr(session, "rephraseApplied", 0) or 0)
+            bad = int(getattr(session, "rephraseRejected", 0) or 0)
+            rate = (ok / a) if a > 0 else 0.0
+            log(event="rephrase_rate",
+                intent=intent,
+                attempts=a,
+                applied=ok,
+                rejected=bad,
+                acceptRate=round(rate, 3))
+        except Exception:
+            pass
+
         return out
-    except Exception:
+    except Exception as e:
+        # Count rejection if we attempted rephrase but failed unexpectedly
+        try:
+            # Fix: avoid double counting if we already raised unsafe_rephrase
+            if not str(e).startswith("unsafe_rephrase"):
+                session.rephraseRejected = int(getattr(session, "rephraseRejected", 0) or 0) + 1
+            
+            if not getattr(session, "lastRephraseRejectReason", None):
+                session.lastRephraseRejectReason = "exception"
+        except Exception:
+            pass
+        try:
+            a = int(getattr(session, "rephraseAttempts", 0) or 0)
+            ok = int(getattr(session, "rephraseApplied", 0) or 0)
+            bad = int(getattr(session, "rephraseRejected", 0) or 0)
+            rate = (ok / a) if a > 0 else 0.0
+            log(event="rephrase_rate",
+                intent=intent,
+                attempts=a,
+                applied=ok,
+                rejected=bad,
+                acceptRate=round(rate, 3),
+                lastRejectReason=str(getattr(session, "lastRephraseRejectReason", "") or ""))
+        except Exception:
+            pass
         log(event="responder_fallback", intent=intent)
         # On failure, return the safe template (already screened above)
         return reply

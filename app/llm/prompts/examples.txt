@@ -1,77 +1,50 @@
-Sir, I got a call saying my bank account may be restricted, what should I check first?
+# Intent-tagged examples for vLLM rephrase
+# Format:
+#   [INTENT=...]
+#   <one statement (no "?") + one question (ends with "?")>
+# Notes:
+# - Do NOT say "red flag" or "red flags".
+# - The statement should refer to what the scammer asked for or claimed (OTP/PIN/link/threat/urgency).
+# - The question must target ONE artifact category only.
 
-Beta, I am on the Paytm app now, where exactly do I go from here?
+[INTENT=INT_ASK_OFFICIAL_HELPLINE]
+You asked for an OTP over chat, which is not appropriate here. What is the official helpline number I should call to verify this?
 
-I received a message about KYC update today, is there any deadline mentioned?
+[INTENT=INT_ASK_OFFICIAL_HELPLINE]
+You’re pressing me to act immediately and share sensitive details. Which official support number should I call to confirm this request?
 
-Sorry Sir, my Airtel network is very weak, the page is not loading fully.
+[INTENT=INT_ASK_OFFICIAL_WEBSITE]
+You sent a link and asked me to verify quickly. What is the official website or domain I should check instead?
 
-It is showing my name incorrectly on the UPI screen, is that normal?
+[INTENT=INT_ASK_OFFICIAL_WEBSITE]
+You’re asking me to use a portal link during an urgent warning. Which official site should I open to verify this independently?
 
-I opened the pension section, but it keeps going back to home screen.
+[INTENT=INT_ASK_TICKET_REF]
+You’re saying my account will be blocked unless I respond right now. What is the reference or complaint ID for this case?
 
-Sir, it is showing a small charge like ₹2 on the screen, is this for verification only?
+[INTENT=INT_ASK_TICKET_REF]
+You asked for OTP along with my account details. What is the case or ticket ID associated with this request?
 
-My old phone is hanging when I press submit, should I wait or retry?
+[INTENT=INT_ASK_DEPARTMENT_BRANCH]
+You claimed to be from the fraud team and asked for OTP. Which department or branch is handling this case?
 
-It says my wallet is temporarily limited on the screen, how long does this usually take?
+[INTENT=INT_ASK_DEPARTMENT_BRANCH]
+You’re presenting this as an official fraud alert and pushing for immediate action. Which office or team is responsible for this verification?
 
-Beta, I am confused between two apps with similar names, which one should I open?
+[INTENT=INT_ASK_ALT_VERIFICATION]
+You asked for OTP or PIN in chat, which I won’t share here. What alternative verification method is available through official channels?
 
-I got an alert saying my card was used online, where do I confirm this officially?
+[INTENT=INT_ASK_ALT_VERIFICATION]
+You’re urging me to act fast and share sensitive information. What different verification option can I use instead?
 
-The app screen is asking me to recheck details, which field should I look at?
+[INTENT=INT_REFUSE_SENSITIVE_ONCE]
+You asked for OTP or PIN, and I won’t share that on chat. Which official channel should I use to verify this safely?
 
-Sir, I am seeing a timer running for 10 minutes, what happens after that?
+[INTENT=INT_CHANNEL_FAIL]
+You sent a link and asked me to verify right away. Which official website should I try instead?
 
-It is showing “beneficiary added successfully” on screen, what should I check next?
+[INTENT=INT_SECONDARY_FAIL]
+You’re insisting I complete this immediately through chat. What other official option can I use to verify it?
 
-My son usually handles these things, but he will come late today.
-
-I am trying from mobile data instead of WiFi now, still it is slow.
-
-The message mentions a reference number, where is it supposed to be entered?
-
-Sir, I don’t want any mistake, can you explain once more slowly?
-
-It is showing “service unavailable” right now, should I try later?
-
-I opened the settings page, but I don’t see any update option there.
-
-Beta, the confirmation screen is not moving ahead, is that okay?
-
-I got a notification just now, but it disappeared quickly.
-
-Sir, which official app should I search for in the Play Store?
-
-It is asking me to agree to terms on the screen, is this required for everyone?
-
-My balance is showing correctly, but the warning message is still there.
-
-I tried opening the page twice already, I don’t want the account to get blocked.
-
-The help section is opening blank on my phone, what else can I do?
-
-Sir, I am worried because this seems linked to my pension account.
-
-It shows “request pending” on screen, how long should I wait?
-
-Beta, please guide me step by step, I don’t want to press the wrong button.
-
-I got a reminder message in the morning, is that related to this issue?
-
-The app language changed suddenly, how do I switch it back?
-
-Sir, it is asking to verify identity, where is that done officially?
-
-I searched the website name you said, but many results are coming.
-
-My phone storage is almost full, could that be causing this error?
-
-It says my profile is incomplete on the screen, which section should I update?
-
-Beta, is this process the same for senior citizens also?
-
-I refreshed the page, but the warning is still showing.
-
-Sir, I want to be careful, please confirm before I proceed.
+[INTENT=INT_CLOSE_AND_VERIFY_SELF]
+You asked for OTP/PIN and pushed urgency, so I will verify independently through official channels. Thank you.

@@ -84,6 +84,12 @@ class SessionState:
     # Used to avoid immediately asking for the same category next turn (timing/state sync redundancy).
     lastNewIocKeys: List[str] = field(default_factory=list)
 
+    # --- Rephrase telemetry (BF_LLM_REPHRASE acceptance rate) ---
+    # Counts are per-session and are safe to persist in Redis via session_repo.
+    rephraseAttempts: int = 0
+    rephraseApplied: int = 0
+    rephraseRejected: int = 0
+    lastRephraseRejectReason: Optional[str] = None
     def __post_init__(self):
         """
         Keep counters consistent:

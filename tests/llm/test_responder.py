@@ -28,8 +28,9 @@ def test_generate_agent_reply_rephrase_success(mock_settings, mock_chat):
     mock_chat.assert_called_once()
     args, _ = mock_chat.call_args
     # Check for the new, stricter system prompt
-    assert "NON-NEGOTIABLES:" in args[0]
-    assert "At most ONE question." in args[0]
+    assert "SAFETY CONSTRAINTS" in args[0]
+    assert "At most ONE question." not in args[0] # Changed in new prompt
+    assert "Exactly ONE investigative question" in args[0]
 
 @patch("app.llm.responder.chat_completion")
 @patch("app.llm.responder.settings")
@@ -59,9 +60,9 @@ def test_generate_agent_reply_procedural_fallback(mock_settings, mock_chat):
     # Should fallback because it looks procedural
     assert "Open your browser" not in reply
     assert reply in [
-        "Okay, I’m a bit concerned about this.",
-        "I understand this sounds important.",
-        "Alright, I want to be careful here."
+        "Okay, I want to be careful about this.",
+        "I understand—this sounds concerning.",
+        "Alright, I’m being cautious here.",
     ]
 
 @patch("app.llm.responder.chat_completion")
