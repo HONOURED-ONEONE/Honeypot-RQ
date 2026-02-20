@@ -24,6 +24,7 @@ def send_final_result(session_id: str):
             scamDetected=bool(getattr(session, "scamDetected", False)),
             totalMessagesExchanged=int(getattr(session, "totalMessagesExchanged", 0) or 0),
         )
+        log(event="callback_payload_preview", sessionId=session_id, payload=payload)
     except Exception:
         pass
 

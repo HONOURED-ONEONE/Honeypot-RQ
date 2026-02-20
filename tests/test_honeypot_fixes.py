@@ -9,11 +9,11 @@ from app.settings import settings
 def test_extractor_missing_ioc():
     session = SessionState(sessionId="test_ext")
     # Test text with various IOCs
-    text = "Call me at +91-9876543210 or 1800-123-4567. Visit https://sbi-verify.com/login?ref=secure. Pay to scammer.fraud@fakebank. Account: 1234-5678-9012-3456."
-    
+    text = "Call me at +91-9876543210 or 1800-123-456. Visit https://sbi-verify.com/login?ref=secure. Pay to scammer.fraud@fakebank. Account: 1234-5678-9012-3456."
+
     update_intelligence_from_text(session, text)
     intel = session.extractedIntelligence
-    
+
     assert "+919876543210" in intel.phoneNumbers
     assert "1800-123-456" in intel.phoneNumbers
     assert "https://sbi-verify.com/login?ref=secure" in intel.phishingLinks

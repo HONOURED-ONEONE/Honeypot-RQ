@@ -7,6 +7,8 @@ from app.api.schemas import HoneypotRequest, HoneypotResponse
 from app.api.auth import require_api_key
 from app.core.orchestrator import handle_event
 from app.api.normalize import normalize_honeypot_payload
+from app.settings import settings
+from app.intel.artifact_registry import snapshot_intent_map, reload_intent_map
 
 router = APIRouter()
 
@@ -66,3 +68,26 @@ async def honeypot_api(request: Request, payload: Any = Body(None)):
 
 async def honeypot_root(request: Request, payload: Any = Body(None)):
     return await _handle_honeypot(request, payload)
+
+
+@router.get("/debug/feature-flags")
+def debug_feature_flags(_=Depends(require_api_key)):
+    """Read-only snapshot of runtime feature flags relevant to instruction-driven phrasing."""
+    return {
+        "BF_LLM_REPHRASE": bool(settings.BF_LLM_REPHRASE),
+        "INTENT_MAP_REFRESH_SEC": int(settings.INTENT_MAP_REFRESH_SEC),
+        "REGISTRY_INTENT_MAP_KEY": settings.REGISTRY_INTENT_MAP_KEY,
+    }
+
+
+@router.get("/debug/intent-map")
+def debug_intent_map(_=Depends(require_api_key)):
+    """Redacted view: shows keys present and whether an instruction is seeded for each."""
+    return {"keys": snapshot_intent_map()}
+
+
+@router.post("/debug/intent-map/reload")
+def debug_intent_map_reload(_=Depends(require_api_key)):
+    """Forces an in-process reload from Redis (useful after seeding)."""
+    keys, ts = reload_intent_map()
+    return {"reloadedKeys": keys, "reloadedAtEpoch": ts}

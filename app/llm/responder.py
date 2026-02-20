@@ -15,6 +15,7 @@ import random
 import re
 import logging
 from typing import List, Dict, Optional
+from pathlib import Path
 
 from app.settings import settings
 from app.llm.vllm_client import chat_completion
@@ -37,6 +38,18 @@ INTENTS_ALLOW_3_SENTENCES = {
     INT_ASK_ALT_VERIFICATION,
     INT_SECONDARY_FAIL,
 }
+
+SINGLE_QUESTION_WRAPPER = (
+    "You must respond with exactly one concise question that progresses the goal.\n"
+    "Do not include procedures, disclaimers, or multiple questions.\n"
+)
+
+def _load_file_text(rel_path: str) -> str:
+    try:
+        base = Path(__file__).parent / "prompts"
+        return (base / rel_path).read_text(encoding="utf-8")
+    except Exception:
+        return ""
 
 # ---------------------------------------------------------------------------
 # Templates (intent-driven only; no tactics, no procedures). Updated with subtle red-flag references.
@@ -227,7 +240,13 @@ def generate_agent_reply(req, session, intent: str, instruction: Optional[str] =
             "- Keep it concise (max 2–3 sentences based on intent).\n"
             "- Do NOT imply resolution or closure unless told.\n"
         )
+        
         user_prompt = (instruction or "").strip() or reply
+        
+        # If instruction is present and rephrase is on, enforce single-question wrapper
+        if instruction and instruction.strip():
+             user_prompt = f"{instruction.strip()}\n\n{SINGLE_QUESTION_WRAPPER}"
+
         out = chat_completion(agent_rules, user_prompt, temperature=0.2, max_tokens=70)
         out = (out or "").strip()
         # Strip list markers to reduce accidental procedural formats before limit

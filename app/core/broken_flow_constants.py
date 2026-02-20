@@ -1,3 +1,4 @@
+from app.settings import settings
 from app.core.state_machine import (
     BF_S0, BF_S1, BF_S2, BF_S3, BF_S4, BF_S5
 )
@@ -92,3 +93,7 @@ SECONDARY_FAILURE_INTENTS = {
 CLOSING_INTENTS = {
     INT_CLOSE_AND_VERIFY_SELF
 }
+
+# How many previous turns to consider before we allow repeating ALT_VERIFICATION
+# Increasing to 2 helps avoid visible loops in short evaluator runs.
+_ALT_COOLDOWN_WINDOW = int(getattr(settings, "ALT_COOLDOWN_WINDOW", 2))

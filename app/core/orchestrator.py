@@ -18,10 +18,11 @@ from app.llm.responder import generate_agent_reply
 from app.core.finalize import should_finalize
 from app.observability.logging import log
 
-from app.settings import settings as app_settings
+from app.settings import settings
 from app.core.guvi_callback import enqueue_guvi_final_result # ✅ NEW
 from app.intel.extractor import update_intelligence_from_text  # ✅ P0.1: registry-driven extraction
 from app.core.guarded_config import begin_session_overlay, end_session_overlay  # ✅ NEW (session-scoped config)
+from app.intel.artifact_registry import get_intent_instruction
 from datetime import datetime
 
 
@@ -78,6 +79,8 @@ def handle_event(req):
             "timestamp": incoming_ts,
         })
         session.turnIndex = int(getattr(session, "turnIndex", 0) or 0) + 1
+        # Persist after ingest so BF memory, counters, and timestamps survive next turn
+        save_session(session)
     except Exception:
         # Keep processing even if persistence fails (non-influential)
         pass
@@ -144,20 +147,51 @@ def handle_event(req):
         latest_text=req.message.text or "",
         intel_dict=intel_dict,
         detection_dict=req.detection or {}, # ✅ detection is dict per schema
-        settings=app_settings,
+        settings=settings,
     )
 
     intent = controller_out.get("intent")
     bf_state = controller_out.get("bf_state")
     force_finalize = controller_out.get("force_finalize", False)
-    reason = controller_out.get("reason", "normal_flow")
+    # Prefer the controller's reason when it asserts finalize; only fallback otherwise
+    if force_finalize:
+        finalize_reason = controller_out.get("reason") or "controller_finalize"
+    else:
+        # should_finalize(...) may return None or a string
+        finalize_reason = should_finalize(session)
+    
+    # We might have been finalized by controller OR fallback
+    finalized = finalize_reason is not None
+
+    # Resolve instruction from Redis-driven intent-map (same runtime env)
+    # The controller might have already populated 'instruction' in its output, 
+    # but we double check against registry just in case.
     instruction = controller_out.get("instruction")
+    responder_key = None
+    if not instruction:
+        # Fallback: check if we can resolve instruction by intent or a hypothetical responder key
+        responder_key = controller_out.get("responder_key") or intent
+        instruction = get_intent_instruction(responder_key) or ""
+    
+    # Log instruction resolution for observability (even if instruction is empty)
+    try:
+        log(event="responder_instruction", sessionId=session.sessionId,
+            intent=intent, responder_key=responder_key,
+            has_instruction=bool(instruction), llm_rephrase=settings.BF_LLM_REPHRASE)
+    except Exception:
+        pass
+
+    # --- Track recent intents for cooldown/loop prevention ---
+    try:
+        session.bf_last_intent = intent
+        recent = list(getattr(session, "bf_recent_intents", []) or [])
+        recent.append(intent)
+        # keep only the last 10 to cap memory
+        session.bf_recent_intents = recent[-10:]
+    except Exception:
+        pass
 
     assert intent is not None, "Intent must be resolved before response generation"
-
-    # Finalize gating: should_finalize returns Optional[str] reason
-    finalize_reason = "force_finalize" if force_finalize else should_finalize(session)
-    finalized = finalize_reason is not None
 
     # Generate reply
     reply_text = generate_agent_reply(
@@ -176,6 +210,8 @@ def handle_event(req):
             "timestamp": reply_ts,
         })
         session.turnIndex = int(getattr(session, "turnIndex", 0) or 0) + 1
+        # Persist after reply so duration & intel accumulation grow across turns
+        save_session(session)
     except Exception:
         # Non-influential; continue even if append fails
         pass
@@ -206,17 +242,20 @@ def handle_event(req):
     # --- Mandatory Callback Trigger (PS-2) ---
     # Only when scamDetected is true and finalization condition is met
     # Ensure it triggers exactly once.
-    if finalized and session.scamDetected and session.callbackStatus in ("none", "failed"):
+    if (force_finalize or finalize_reason) and session.scamDetected and session.callbackStatus in ("none", "failed"):
         # Keep counters synced for callback payload
         session.totalMessagesExchanged = int(getattr(session, "turnIndex", 0) or 0)
 
         # Mark lifecycle and enqueue callback
         session.state = "READY_TO_REPORT"
         try:
+            # Pass through the controller's reason so evaluator sees the specific gate
             enqueue_guvi_final_result(session, finalize_reason=finalize_reason)
             session.callbackStatus = "queued"
         except Exception:
             session.callbackStatus = "failed"
+        # Persist session (kept as-is)
+        save_session(session)
 
     # Persist session
     save_session(session)
@@ -228,6 +267,7 @@ def handle_event(req):
             sessionId=session.sessionId,
             bf_state=bf_state,
             intent=intent,
+            responder_key=responder_key,
             finalize_reason=finalize_reason or "",
             totalMessagesExchanged=getattr(session, "turnIndex", 0),
         )

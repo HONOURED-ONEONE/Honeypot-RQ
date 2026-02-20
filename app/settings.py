@@ -24,6 +24,7 @@ class Settings:
     BF_NO_PROGRESS_TURNS: int = int(os.getenv("BF_NO_PROGRESS_TURNS", "3"))
     BF_REPEAT_LIMIT: int = int(os.getenv("BF_REPEAT_LIMIT", "2"))
     BF_SECONDARY_BOUNCE_LIMIT: int = int(os.getenv("BF_SECONDARY_BOUNCE_LIMIT", "1"))
+    ALT_COOLDOWN_WINDOW: int = int(os.getenv("ALT_COOLDOWN_WINDOW", "2"))
     BF_LLM_REPHRASE: bool = os.getenv("BF_LLM_REPHRASE", "false").lower() == "true"
 
     # Registry Overrides
@@ -41,5 +42,8 @@ class Settings:
 
     GUVI_CALLBACK_URL: str = os.getenv("GUVI_CALLBACK_URL", "")
     CALLBACK_TIMEOUT_SEC: int = int(os.getenv("CALLBACK_TIMEOUT_SEC", "5"))
+
+    # RC-8: hot reload period for intent-map (seconds). 0 disables refresh (cache only).
+    INTENT_MAP_REFRESH_SEC: int = int(os.getenv("INTENT_MAP_REFRESH_SEC", "60"))
 
 settings = Settings()

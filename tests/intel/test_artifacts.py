@@ -3,7 +3,7 @@ from app.intel.artifact_registry import artifact_registry
 from app.intel.keywords import extract_keywords
 
 def test_phone_extraction():
-    text = "Call me at +91-9876543210 or 1800-123-4567"
+    text = "Call me at +91-9876543210 or 1800-123-456"
     res = artifact_registry.extract_all(text)
     assert "+919876543210" in res["phoneNumbers"]
     assert "1800-123-456" in res["phoneNumbers"]

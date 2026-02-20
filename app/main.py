@@ -2,6 +2,8 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.routes import router
+from app.settings import settings
+from app.intel.artifact_registry import snapshot_intent_map
 
 app = FastAPI(title="Agentic Honeypot API")
 
@@ -27,3 +29,11 @@ def root():
 @app.get("/health")
 def health():
     return {"status": "ok"}
+
+
+# Optional: log a minimal boot snapshot (stdout)
+try:
+    im = snapshot_intent_map()
+    print(f"[boot] BF_LLM_REPHRASE={settings.BF_LLM_REPHRASE} | intent_map_keys={len(im)}")
+except Exception:
+    pass

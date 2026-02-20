@@ -1,6 +1,7 @@
 from typing import Dict, Any, List
 
 from app.core.broken_flow_constants import *
+from app.core.broken_flow_constants import _ALT_COOLDOWN_WINDOW
 from app.core.state_machine import *
 from app.store.models import SessionState
 from app.core.finalize import should_finalize
@@ -52,6 +53,19 @@ def _expected_iocs_covered(intel_dict: Dict[str, Any], scam_type: str) -> bool:
             return False
     return True
 
+# Controller-owned reasons so we never fall back to generic strings when we know better
+CTRL_REASON_EXPECTED_IOCS = "expected_iocs_covered"
+CTRL_REASON_MIN_TURNS_AND_IOCS = "ioc_min_count_and_turns"
+CTRL_REASON_NO_PROGRESS = "no_progress_window"
+CTRL_REASON_SECONDARY_BOUNCE = "secondary_bounce_limit"
+
+def finalize(reason: str) -> Dict[str, str]:
+    """Standard shape consumed by orchestrator."""
+    return {"force_finalize": True, "reason": reason}
+
+def keep_going() -> Dict[str, str]:
+    return {"force_finalize": False, "reason": ""}
+
 # Repetition control / progression helpers
 # Allowed intents that directly support artifact progress or safe control surfaces
 _ALLOWED_INTENTS = {
@@ -69,7 +83,6 @@ _ALLOWED_INTENTS = {
 
 _ACK_SET = {INT_ACK_CONCERN}
 _RECENT_WINDOW = 3
-_ALT_COOLDOWN_WINDOW = 2
 
 # Broad instruction phrases per intent (fallbacks)
 INSTRUCTION_TEXTS: Dict[str, str] = {
@@ -374,21 +387,52 @@ def choose_next_action(
                     intent = INT_CLOSE_AND_VERIFY_SELF
                     target_key = None
                     force_finalize = True
-                    reason = "expected_iocs_covered"
+                    reason = CTRL_REASON_EXPECTED_IOCS
                 elif ioc_cnt >= settings.FINALIZE_MIN_IOC_CATEGORIES and turns >= 8:
                     intent = INT_CLOSE_AND_VERIFY_SELF
                     target_key = None
                     force_finalize = True
-                    reason = "ioc_min_count_and_turns"
+                    reason = CTRL_REASON_MIN_TURNS_AND_IOCS
         except Exception:
             pass
 
         intent = _constrain(intent)
 
         # Keep existing OTP → HELPLINE bias when phone missing
+        got_phone = bool(intel_dict.get("phoneNumbers"))
+        otp_in_latest = "otp" in (latest_text or "").lower()
         if otp_in_latest and not got_phone:
             intent = INT_ASK_OFFICIAL_HELPLINE
             reason = "otp_bias_helpline"
+
+        # --------- Loop prevention and OTP pivot ----------
+        recent_intents_list: List[str] = list(getattr(session, "bf_recent_intents", []) or [])
+
+        def _cooldown_blocked(name: str) -> bool:
+            if not name:
+                return False
+            # Look at the last _ALT_COOLDOWN_WINDOW entries
+            window = recent_intents_list[-_ALT_COOLDOWN_WINDOW:] if _ALT_COOLDOWN_WINDOW > 0 else recent_intents_list
+            return any(x == name for x in window)
+
+        def _has_phone() -> bool:
+            try:
+                phones = (intel_dict or {}).get("phoneNumbers") or []
+                return len(phones) > 0
+            except Exception:
+                return False
+
+        def _otp_detected() -> bool:
+            return "otp" in (latest_text or "").lower()
+
+        if intent == INT_ASK_ALT_VERIFICATION:
+            if _otp_detected() and not _has_phone():
+                intent = INT_ASK_OFFICIAL_HELPLINE
+                reason = "otp_pivot_helpline"
+            elif _cooldown_blocked(INT_ASK_ALT_VERIFICATION):
+                intent = INT_ACK_CONCERN
+                reason = "alt_verification_cooldown_pivot"
+
     elif session.bf_state == BF_S5:
         intent = INT_CLOSE_AND_VERIFY_SELF
         force_finalize = True
@@ -435,20 +479,6 @@ def choose_next_action(
         session.bf_repeat_count = 0
         reason = "repetition_escalation"
 
-    # ------------------------------------------------------------
-    # PIVOT 2a: Cooldown for ALT_VERIFICATION to avoid repeated loops
-    # If ALT_VERIFICATION was chosen very recently (last 2 intents), pivot once.
-    # ------------------------------------------------------------
-    if intent == INT_ASK_ALT_VERIFICATION and intent in session.bf_recent_intents[-_ALT_COOLDOWN_WINDOW:]:
-        intent, target_key = _pivot_intent(
-            intel_dict,
-            session.bf_recent_intents,
-            intent,
-            session.scam_type,
-        )
-        reason = "alt_verification_cooldown"
-        intent = _constrain(intent)
-
     # PIVOT 2b: ACK repetition guard — if ACK dominates recent window, pivot away
     if intent in _ACK_SET and sum(1 for x in recent if x in _ACK_SET) >= 2:
         intent, target_key = _pivot_intent(
@@ -462,20 +492,18 @@ def choose_next_action(
 
     # ------------------------------------------------------------
 
-    session.bf_last_intent = intent
-    session.bf_recent_intents.append(intent)
-    if len(session.bf_recent_intents) > 10:
-        session.bf_recent_intents.pop(0)
-
     # Resolve a broad instruction for the responder
     instruction = _instruction_for(intent, target_key)
+    
+    # NEW: choose a responder_key; by default we mirror the intent
+    responder_key = intent
 
     return {
         "bf_state": session.bf_state,
         "intent": intent,
+        "responder_key": responder_key,
         "reason": reason,
         "force_finalize": force_finalize,
         "scam_type": session.scam_type,
-        # NEW: hand instruction to responder for LLM phrasing
         "instruction": instruction,
     }

@@ -2,8 +2,9 @@ import re
 import time
 import json
 from dataclasses import dataclass, field
-from typing import Callable, List, Optional, Dict, Any
+from typing import Callable, List, Optional, Dict, Any, Iterable, Set, Tuple
 from app.settings import settings
+from app.store.redis_conn import get_redis
 
 @dataclass
 class ArtifactSpec:
@@ -24,9 +25,12 @@ class ArtifactSpec:
 # Case IDs: REF/CASE/TICKET + 4–12 A-Z0-9
 # Policy: POLICY/POL/INS + 6–16 A-Z0-9
 # Order: ORDER/ORD + 6–16 A-Z0-9
-CASE_ID_RE   = re.compile(r"\b(?:REF|CASE|TICKET)[-_:\s]?[A-Z0-9]{4,12}\b", re.I)
-POLICY_RE    = re.compile(r"\b(?:POLICY|POL|INS)[-_:\s]?[A-Z0-9]{6,16}\b", re.I)
-ORDER_ID_RE  = re.compile(r"\b(?:ORDER|ORD)[-_:\s]?[A-Z0-9]{6,16}\b", re.I)
+# CASE: e.g., REF-987654 or CASE-AB12
+_CASE_ID_RE = re.compile(r'(?<![A-Z0-9])(?:REF|CASE|TKT|SR)[-\s]?[A-Z0-9]{4,12}(?![A-Z0-9])', re.I)
+# POLICY: e.g., POL-12345678 (typical insurer style)
+_POLICY_NO_RE = re.compile(r'(?<![A-Z0-9])(?:POL|POLICY)[-\s]?[A-Z0-9]{6,16}(?![A-Z0-9])', re.I)
+# ORDER: e.g., ORD-123456, PO-998877, ORDER-ABC123
+_ORDER_NO_RE = re.compile(r'(?<![A-Z0-9])(?:ORD|ORDER|PO)[-\s]?[A-Z0-9]{4,16}(?![A-Z0-9])', re.I)
 
 # Regexes from existing extractor.py
 UPI_RE = re.compile(r"\b[a-zA-Z0-9.\-_]{2,64}@[a-zA-Z]{2,32}\b")
@@ -34,9 +38,12 @@ UPI_RE = re.compile(r"\b[a-zA-Z0-9.\-_]{2,64}@[a-zA-Z]{2,32}\b")
 # Correct alternation: http(s)://... OR www....
 URL_RE = re.compile(r"\b(?:https?://\S+|www\.\S+)", re.IGNORECASE)
 _PHONE_PATTERNS = [
-    re.compile(r"(?:\+91[-\s]?)?[6-9]\d{9}"),
-    re.compile(r"1800[-\s]?\d{3}[-\s]?\d{3}"),
-    re.compile(r"1800\d{6,7}"),
+    # Mobile (optionally +91), guarded so it cannot be carved out of adjacent digits
+    re.compile(r"(?<!\d)(?:\+91[-\s]?)?[6-9]\d{9}(?!\d)"),
+    # Toll-free 1800 with separators
+    re.compile(r"(?<!\d)1800[-\s]?\d{3}[-\s]?\d{3}(?!\d)"),
+    # Toll-free 1800 contiguous digits (older style)
+    re.compile(r"(?<!\d)1800\d{6,7}(?!\d)"),
 ]
 _ACCT_PATTERN = re.compile(r"\b(?:\d[ -]?){12,19}\b")
 
@@ -59,6 +66,87 @@ def normalize_url(u: str) -> str:
 
 def normalize_bank(s: str) -> str:
     return re.sub(r"\D", "", s)
+
+# ✅ NEW: Helpers for case/policy/order extraction
+def _dedupe_preserve(seq: Iterable[str]) -> List[str]:
+    seen: Set[str] = set()
+    out: List[str] = []
+    for s in seq:
+        if s not in seen:
+            seen.add(s); out.append(s)
+    return out
+
+def _norm_upper_hyphen(s: str) -> str:
+    # Normalize spaces to hyphen and upper-case for consistency
+    s = re.sub(r'\s+', '-', s.strip())
+    return s.upper()
+
+def _extract_case_ids(text: str) -> List[str]:
+    return _dedupe_preserve(_norm_upper_hyphen(m.group(0)) for m in _CASE_ID_RE.finditer(text or ""))
+
+def _extract_policy_numbers(text: str) -> List[str]:
+    return _dedupe_preserve(_norm_upper_hyphen(m.group(0)) for m in _POLICY_NO_RE.finditer(text or ""))
+
+def _extract_order_numbers(text: str) -> List[str]:
+    return _dedupe_preserve(_norm_upper_hyphen(m.group(0)) for m in _ORDER_NO_RE.finditer(text or ""))
+
+# ---------------------------
+# Intent-map (instruction lookup)
+# ---------------------------
+_INTENT_MAP_CACHE: Dict[str, Dict[str, str]] = {}
+_INTENT_MAP_LAST_LOAD_TS: int = 0
+
+def _now_s() -> int:
+    import time
+    return int(time.time())
+
+def _fetch_from_redis() -> Dict[str, Dict[str, str]]:
+    """Raw fetch from Redis and normalize keys → lower-case."""
+    data: Dict[str, Dict[str, str]] = {}
+    try:
+        r = get_redis()
+        raw = r.get(settings.REGISTRY_INTENT_MAP_KEY) or b"{}"
+        parsed = json.loads(raw.decode("utf-8")) if isinstance(raw, (bytes, bytearray)) else (json.loads(raw) if raw else {})
+        data = {str(k).lower(): {"intent": v.get("intent",""), "instruction": v.get("instruction","")}
+                for k, v in (parsed or {}).items()}
+    except Exception:
+        data = {}
+    return data
+
+def _load_intent_map() -> Dict[str, Dict[str, str]]:
+    """Fetch intent-map with memoization + periodic refresh based on INTENT_MAP_REFRESH_SEC."""
+    global _INTENT_MAP_CACHE, _INTENT_MAP_LAST_LOAD_TS
+    now_ts = _now_s()
+    # Refresh on first call or after TTL
+    if (not _INTENT_MAP_CACHE) or (
+        settings.INTENT_MAP_REFRESH_SEC > 0 and (now_ts - _INTENT_MAP_LAST_LOAD_TS) >= settings.INTENT_MAP_REFRESH_SEC
+    ):
+        _INTENT_MAP_CACHE = _fetch_from_redis()
+        _INTENT_MAP_LAST_LOAD_TS = now_ts
+    return _INTENT_MAP_CACHE
+
+def get_intent_instruction(map_key: str) -> Optional[str]:
+    """Return instruction string for map_key if present; else None."""
+    m = _load_intent_map()
+    if not map_key:
+        return None
+    row = m.get(str(map_key).lower())
+    return (row or {}).get("instruction") if row else None
+
+def reload_intent_map() -> Tuple[int, int]:
+    """Force a reload; returns (keys, ts). Useful for debug endpoints."""
+    global _INTENT_MAP_CACHE, _INTENT_MAP_LAST_LOAD_TS
+    _INTENT_MAP_CACHE = _fetch_from_redis()
+    _INTENT_MAP_LAST_LOAD_TS = _now_s()
+    return (len(_INTENT_MAP_CACHE), _INTENT_MAP_LAST_LOAD_TS)
+
+def snapshot_intent_map() -> Dict[str, str]:
+    """Safe, redacted view for debug: show keys only and whether instruction exists."""
+    m = _load_intent_map()
+    out: Dict[str, str] = {}
+    for k, v in (m or {}).items():
+        out[k] = "yes" if (v.get("instruction") or "").strip() else "no"
+    return out
 
 class ArtifactRegistry:
     def __init__(self):
@@ -333,26 +421,23 @@ artifact_registry.register(ArtifactSpec(
 ))
 
 # ✅ NEW: Case IDs / Policy Numbers / Order Numbers
-def _upper(s: str) -> str:
-    return (s or "").strip().upper()
-
 artifact_registry.register(ArtifactSpec(
     key="caseIds",
-    extract_fn=lambda t: CASE_ID_RE.findall(t or ""),
-    normalize_fn=_upper,
+    extract_fn=_extract_case_ids,
+    normalize_fn=None, # Already normalized in extractor
     priority=8
 ))
 
 artifact_registry.register(ArtifactSpec(
     key="policyNumbers",
-    extract_fn=lambda t: POLICY_RE.findall(t or ""),
-    normalize_fn=_upper,
+    extract_fn=_extract_policy_numbers,
+    normalize_fn=None, # Already normalized in extractor
     priority=7
 ))
 
 artifact_registry.register(ArtifactSpec(
     key="orderNumbers",
-    extract_fn=lambda t: ORDER_ID_RE.findall(t or ""),
-    normalize_fn=_upper,
+    extract_fn=_extract_order_numbers,
+    normalize_fn=None, # Already normalized in extractor
     priority=6
 ))

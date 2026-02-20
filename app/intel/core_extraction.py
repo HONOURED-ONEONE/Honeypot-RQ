@@ -56,8 +56,9 @@ def normalize_text(s: str) -> str:
 
 # Phone (India): allow optional +91 / 0 prefix, separators, and spacey obfuscations already normalized.
 # Enforce leading digit 6-9 for 10-digit mobiles, avoid overmatching longer digit runs.
+# Guard with numeric look-arounds so matches don't happen inside longer digit runs
 PHONE_RE = re.compile(
-    r'\b(?:\+?91[\s-]?)?(?:0[\s-]?)?([6-9]\d[\s-]?\d{2}[\s-]?\d{3}[\s-]?\d{3})\b'
+    r'(?<!\d)(?:\+?91[\s-]?)?(?:0[\s-]?)?([6-9]\d[\s-]?\d{2}[\s-]?\d{3}[\s-]?\d{3})(?!\d)'
 )
 
 # Email: tolerant but case-insensitive; punycode/IDN not required for scoring, keep simple and fast.
@@ -208,3 +209,6 @@ def extract_all(text: str) -> Dict[str, List[str]]:
         "upiIds": upis,
         "bankAccounts": accts
     }
+
+def extract_phones_tier1(t: str) -> List[str]:
+    return [m.group(1) for m in PHONE_RE.finditer(t)]
