@@ -1,58 +1,65 @@
-# app/core/guvi_callback.py
-from typing import Optional
+"""
+Callback enqueuer (rewired)
+---------------------------
+We keep the public function name `enqueue_guvi_final_result(...)` so the orchestrator
+does not change, but we now enqueue the Group-D path:
 
-import requests
-from rq import Queue
+    app.queue.jobs.send_final_callback_job(session_id)
 
-from app.store.redis_conn import get_redis
-from app.settings import settings
+This job calls app/callback/client.py::send_final_result(session_id), which:
+  - builds the new payload (version + fingerprint) via app/callback/payloads.py,
+  - validates shape locally,
+  - logs `callback_payload_preview` + fingerprint,
+  - posts to GUVI evaluator.
 
+This replaces the legacy `_post_to_guvi(...)` worker path.
+"""
 
-GUVI_ENDPOINT_DEFAULT = "https://hackathon.guvi.in/api/updateHoneyPotFinalResult"
-
-
-def _build_payload(session, finalize_reason: Optional[str] = None) -> dict:
-    intel = session.extractedIntelligence
-
-    # PS-2 mandatory payload shape
-    # https://hackathon.guvi.in/api/updateHoneyPotFinalResult
-    payload = {
-        "sessionId": session.sessionId,
-        "scamDetected": bool(session.scamDetected),
-        "totalMessagesExchanged": int(getattr(session, "turnIndex", 0) or session.totalMessagesExchanged or 0),
-        "extractedIntelligence": {
-            "bankAccounts": getattr(intel, "bankAccounts", []) or [],
-            "upiIds": getattr(intel, "upiIds", []) or [],
-            "phishingLinks": getattr(intel, "phishingLinks", []) or [],
-            "phoneNumbers": getattr(intel, "phoneNumbers", []) or [],
-            # If you don’t have suspiciousKeywords yet, send empty list for now.
-            "suspiciousKeywords": getattr(intel, "suspiciousKeywords", []) or [],
-        },
-        "agentNotes": (getattr(session, "agentNotes", "") or "").strip(),
-    }
-
-    # Optional: include finalize reason in agentNotes to help debugging (not required)
-    if finalize_reason and payload["agentNotes"] == "":
-        payload["agentNotes"] = f"finalize_reason={finalize_reason}"
-
-    return payload
+from app.queue.jobs import send_final_callback_job
+from app.observability.logging import log
+from app.store.session_repo import save_session
 
 
-def _post_to_guvi(payload: dict) -> None:
-    url = settings.GUVI_CALLBACK_URL or GUVI_ENDPOINT_DEFAULT
-    requests.post(url, json=payload, timeout=settings.CALLBACK_TIMEOUT_SEC)
+def enqueue_guvi_final_result(session, finalize_reason: str = ""):
+    """
+    Public enqueuer used by orchestrator.
+    Now enqueues the new job: app.queue.jobs.send_final_callback_job(sessionId).
+    """
+    # Persist session fields the worker/job needs (defensive)
+    try:
+        # Ensure finalize reason & counters are durable before queuing
+        if finalize_reason:
+            session.agentNotes = (session.agentNotes or "").strip() or f"finalize_reason={finalize_reason}"
+        save_session(session)
+    except Exception:
+        # Non-influential: continue even if save fails
+        pass
+
+    # Enqueue the new job
+    try:
+        send_final_callback_job(session.sessionId)
+        try:
+            log(event="callback_enqueued",
+                sessionId=session.sessionId,
+                job="send_final_callback_job",
+                finalize_reason=finalize_reason or "")
+        except Exception:
+            pass
+    except Exception:
+        # surface minimal log for observability; orchestrator will set callbackStatus accordingly
+        try:
+            log(event="callback_enqueue_failed",
+                sessionId=session.sessionId,
+                job="send_final_callback_job")
+        except Exception:
+            pass
+        raise
 
 
-def enqueue_guvi_final_result(session, finalize_reason: Optional[str] = None) -> None:
-    payload = _build_payload(session, finalize_reason=finalize_reason)
-
-    q = Queue(settings.RQ_QUEUE_NAME, connection=get_redis())
-
-    # enqueue the HTTP post task
-    q.enqueue(
-        _post_to_guvi,
-        payload,
-        job_timeout=settings.CALLBACK_TIMEOUT_SEC + 5,  # small buffer
-        result_ttl=0,
-        failure_ttl=0,
-    )
+# --------- DEPRECATED (left as no-op for safety) ----------
+def _post_to_guvi(*args, **kwargs):
+    """
+    Deprecated. The worker should never call this in the new build.
+    If you still see this in worker logs, the worker is running an old image.
+    """
+    raise RuntimeError("Deprecated path: _post_to_guvi is no longer used. Restart worker with the patched image.")
