@@ -92,9 +92,17 @@ def test_handle_event_persistence_and_counters(
     assert session.conversation[0]["sender"] == "scammer"
     assert session.conversation[0]["text"] == "hello +919876543210"
     assert session.conversation[0]["timestamp"] == 123456
-    assert session.conversation[1]["sender"] == "user"
+    assert session.conversation[1]["sender"] == "agent"
     assert session.conversation[1]["text"] == "Agent reply here"
     assert isinstance(session.conversation[1]["timestamp"], int)
+
+    # Verify engagement_snapshot log
+    # log is called for turn_processed and engagement_snapshot
+    snapshot_call = next((c for c in mock_log.call_args_list if c.kwargs.get("event") == "engagement_snapshot"), None)
+    assert snapshot_call is not None
+    assert snapshot_call.kwargs["sessionId"] == "test_session"
+    assert "durationSec" in snapshot_call.kwargs
+    assert snapshot_call.kwargs["turns"] == 2
 
 
 @patch("app.core.orchestrator.load_session")

@@ -205,7 +205,7 @@ def handle_event(req):
     try:
         reply_ts = int(time.time() * 1000)
         session.conversation.append({
-            "sender": "user",
+            "sender": "agent",
             "text": reply_text or "",
             "timestamp": reply_ts,
         })
@@ -227,7 +227,7 @@ def handle_event(req):
         # last agent reply timestamp
         last_ts = None
         for m in reversed(session.conversation):
-            if (m.get("sender") == "user") and m.get("timestamp"):
+            if (m.get("sender") == "agent") and m.get("timestamp"):
                 last_ts = m["timestamp"]
                 break
         if isinstance(first_ts, (int, float)) and isinstance(last_ts, (int, float)) and last_ts >= first_ts:
@@ -237,6 +237,18 @@ def handle_event(req):
             session.engagementDurationSeconds = int(getattr(session, "engagementDurationSeconds", 0) or 0)
     except Exception:
         # retain existing value if any
+        pass
+
+    # Per-turn engagement snapshot (observability)
+    try:
+        log(
+            event="engagement_snapshot",
+            sessionId=session.sessionId,
+            durationSec=int(getattr(session, "engagementDurationSeconds", 0) or 0),
+            turns=int(getattr(session, "turnIndex", 0) or 0),
+            messages=len(session.conversation or []),
+        )
+    except Exception:
         pass
 
     # --- Mandatory Callback Trigger (PS-2) ---

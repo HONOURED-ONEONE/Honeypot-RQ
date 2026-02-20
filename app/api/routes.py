@@ -1,3 +1,4 @@
+import json
 from typing import Any
 
 from fastapi import APIRouter, Depends, Body, Request
@@ -9,6 +10,7 @@ from app.core.orchestrator import handle_event
 from app.api.normalize import normalize_honeypot_payload
 from app.settings import settings
 from app.intel.artifact_registry import snapshot_intent_map, reload_intent_map
+from app.store.redis_conn import get_redis
 
 router = APIRouter()
 
@@ -91,3 +93,19 @@ def debug_intent_map_reload(_=Depends(require_api_key)):
     """Forces an in-process reload from Redis (useful after seeding)."""
     keys, ts = reload_intent_map()
     return {"reloadedKeys": keys, "reloadedAtEpoch": ts}
+
+
+@router.get("/debug/last-callback/{session_id}")
+def debug_last_callback_payload(session_id: str, _=Depends(require_api_key)):
+    """
+    Returns the last callback payload stored for this session (if enabled).
+    Useful to compare your source-of-truth vs. any external summary views.
+    """
+    if not settings.STORE_LAST_CALLBACK_PAYLOAD:
+        return {"enabled": False}
+    try:
+        r = get_redis()
+        raw = r.get(f"session:{session_id}:last_callback_payload")
+        return {"sessionId": session_id, "payload": (raw and json.loads(raw)) or None}
+    except Exception:
+        return {"sessionId": session_id, "payload": None}

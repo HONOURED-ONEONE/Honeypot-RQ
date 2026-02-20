@@ -51,4 +51,10 @@ class Settings:
     # RC-8: hot reload period for intent-map (seconds). 0 disables refresh (cache only).
     INTENT_MAP_REFRESH_SEC: int = int(os.getenv("INTENT_MAP_REFRESH_SEC", "60"))
 
+    # Group D: payload contract integrity & observability
+    CALLBACK_PAYLOAD_VERSION: str = os.getenv("CALLBACK_PAYLOAD_VERSION", "1.0.0")
+    PAYLOAD_FINGERPRINT_ALGO: str = os.getenv("PAYLOAD_FINGERPRINT_ALGO", "sha256")
+    # Store the last payload per session under a debug key in Redis for retrieval
+    STORE_LAST_CALLBACK_PAYLOAD: bool = os.getenv("STORE_LAST_CALLBACK_PAYLOAD", "true").lower() == "true"
+
 settings = Settings()

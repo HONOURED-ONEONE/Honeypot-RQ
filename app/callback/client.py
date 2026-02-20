@@ -1,9 +1,11 @@
 import httpx
 import time
+import json
 from app.settings import settings
 from app.store.session_repo import load_session, save_session
-from app.callback.payloads import build_final_payload
+from app.callback.payloads import build_final_payload, validate_final_payload
 from app.observability.logging import log
+from app.store.redis_conn import get_redis
 
 
 def send_final_result(session_id: str):
@@ -12,6 +14,13 @@ def send_final_result(session_id: str):
 
     session = load_session(session_id)
     payload = build_final_payload(session)
+    ok, reason = validate_final_payload(payload)
+    if not ok:
+        try:
+            log(event="callback_payload_invalid", sessionId=session_id, reason=reason, payloadPreview=payload)
+        except Exception:
+            pass
+        raise RuntimeError(f"Invalid callback payload: {reason}")
 
     # Send callback (executed in worker)
     start = time.time()
@@ -23,8 +32,17 @@ def send_final_result(session_id: str):
             timeoutSec=int(getattr(settings, "CALLBACK_TIMEOUT_SEC", 5) or 5),
             scamDetected=bool(getattr(session, "scamDetected", False)),
             totalMessagesExchanged=int(getattr(session, "totalMessagesExchanged", 0) or 0),
+            payloadFingerprint=str(payload.get("payloadFingerprint","na")),
         )
         log(event="callback_payload_preview", sessionId=session_id, payload=payload)
+    except Exception:
+        pass
+
+    # Store a copy of the last payload in Redis for debug retrieval
+    try:
+        if getattr(settings, "STORE_LAST_CALLBACK_PAYLOAD", True):
+            r = get_redis()
+            r.set(f"session:{session_id}:last_callback_payload", json.dumps(payload))
     except Exception:
         pass
 
@@ -43,6 +61,7 @@ def send_final_result(session_id: str):
                     sessionId=session_id,
                     statusCode=int(resp.status_code),
                     elapsedMs=int(elapsed_ms),
+                    payloadFingerprint=str(payload.get("payloadFingerprint","na")),
                 )
             except Exception:
                 pass
@@ -57,6 +76,7 @@ def send_final_result(session_id: str):
                 sessionId=session_id,
                 statusCode=int(resp.status_code),
                 elapsedMs=int(elapsed_ms),
+                payloadFingerprint=str(payload.get("payloadFingerprint","na")),
                 responseText=(resp.text or "")[:500],
             )
         except Exception:
@@ -78,6 +98,7 @@ def send_final_result(session_id: str):
                 elapsedMs=int(elapsed_ms),
                 errorType=type(e).__name__,
                 error=str(e)[:500],
+                payloadFingerprint=str(payload.get("payloadFingerprint","na")),
             )
         except Exception:
             pass
