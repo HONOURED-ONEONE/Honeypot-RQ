@@ -153,7 +153,7 @@ INTENT_TEMPLATES: Dict[str, List[str]] = {
     INT_CHANNEL_FAIL: [
         "The page isn’t opening on my phone right now. Which official page should I try instead?",
         "I’m seeing an error while trying to check this. What official place should I look at?",
-        "The link doesn’t seem to load here. Which official site should I open directly?",
+        "The link doesn’t seem to load here. Which official site should I visit directly?",
     ],
 
     INT_ASK_OFFICIAL_WEBSITE: [
@@ -414,6 +414,7 @@ def generate_agent_reply(
     intent: str,
     instruction: Optional[str] = None,
     red_flag_prefix: Optional[str] = None,
+    persona_style: Optional[str] = None,
 ) -> str:
     """
     Intent-driven responder.
@@ -518,6 +519,7 @@ def generate_agent_reply(
 
         trimmed = (instruction or "").strip()
         pfx = (red_flag_prefix or "").strip()
+        sty = (persona_style or "").strip()
 
         # Few-shot examples (optional)
         exs = _select_examples(intent, k=3)
@@ -530,6 +532,7 @@ def generate_agent_reply(
         if trimmed:
             core = (
                 f"RED_FLAG_PREFIX: {pfx}\n"
+                f"PERSONA_STYLE: {sty}\n"
                 f"INTENT: {intent}\n"
                 f"INSTRUCTION: {trimmed}\n\n"
                 f"{SINGLE_QUESTION_WRAPPER}"
@@ -540,6 +543,7 @@ def generate_agent_reply(
             if goal and intent != INT_CLOSE_AND_VERIFY_SELF:
                 core = (
                     f"RED_FLAG_PREFIX: {pfx}\n"
+                    f"PERSONA_STYLE: {sty}\n"
                     f"INTENT: {intent}\n"
                     f"GOAL: {goal}\n\n"
                     f"{SINGLE_QUESTION_WRAPPER}"

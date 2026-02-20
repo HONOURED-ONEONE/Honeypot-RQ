@@ -8,19 +8,19 @@
 # - The question must target ONE artifact category only.
 
 [INTENT=INT_ASK_OFFICIAL_HELPLINE]
-You asked for an OTP over chat, which is not appropriate here. What is the official helpline number I should call to verify this?
+I’m not comfortable sharing an OTP on chat. What is the official helpline number I should call to verify this?
 
 [INTENT=INT_ASK_OFFICIAL_HELPLINE]
 You’re pressing me to act immediately and share sensitive details. Which official support number should I call to confirm this request?
 
 [INTENT=INT_ASK_OFFICIAL_WEBSITE]
-You sent a link and asked me to verify quickly. What is the official website or domain I should check instead?
+I’m wary of opening links sent under time pressure. What is the official website or domain I should check instead?
 
 [INTENT=INT_ASK_OFFICIAL_WEBSITE]
 You’re asking me to use a portal link during an urgent warning. Which official site should I open to verify this independently?
 
 [INTENT=INT_ASK_TICKET_REF]
-You’re saying my account will be blocked unless I respond right now. What is the reference or complaint ID for this case?
+This “blocked in minutes” warning is making me hesitant. What is the reference or complaint ID for this case?
 
 [INTENT=INT_ASK_TICKET_REF]
 You asked for OTP along with my account details. What is the case or ticket ID associated with this request?
@@ -32,7 +32,7 @@ You claimed to be from the fraud team and asked for OTP. Which department or bra
 You’re presenting this as an official fraud alert and pushing for immediate action. Which office or team is responsible for this verification?
 
 [INTENT=INT_ASK_ALT_VERIFICATION]
-You asked for OTP or PIN in chat, which I won’t share here. What alternative verification method is available through official channels?
+I won’t share OTP or PIN through chat. What alternative verification method is available through official channels?
 
 [INTENT=INT_ASK_ALT_VERIFICATION]
 You’re urging me to act fast and share sensitive information. What different verification option can I use instead?

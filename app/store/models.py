@@ -66,6 +66,10 @@ class SessionState:
     lastRedFlagTag: Optional[str] = None
     redFlagHistory: List[str] = field(default_factory=list)
 
+    # --- Persona style state (Behavior cue) ---
+    # lastPersonaStyle: "CONFUSION", "SKEPTICAL", "TECH_FRICTION", "DELAY"
+    lastPersonaStyle: Optional[str] = None
+    personaStyleHistory: List[str] = field(default_factory=list)
     # --- Anti-redundancy state (Conversation Quality support) ---
     # Track when an IOC category was last asked, to prevent repeated questions.
     # key: artifact category (e.g., "phoneNumbers"), value: last turnIndex when asked

@@ -1,13 +1,17 @@
 import pytest
 from unittest.mock import patch, MagicMock
-from app.core.guvi_callback import enqueue_guvi_final_result, _build_payload
+from app.core.guvi_callback import enqueue_guvi_final_result
+from app.callback.payloads import build_final_payload
 from app.queue.jobs import send_final_callback_job
 from app.store.models import SessionState
 
 def test_build_payload():
     session = SessionState(sessionId="test_session", turnIndex=5, scamDetected=True)
     session.extractedIntelligence.phoneNumbers = ["123"]
-    payload = _build_payload(session, finalize_reason="milestone")
+    # build_final_payload doesn't take finalize_reason directly anymore?
+    # Let's check signature in app/callback/payloads.py
+    # content from prompt: def build_final_payload(session: SessionState) -> dict:
+    payload = build_final_payload(session)
     
     assert payload["sessionId"] == "test_session"
     assert payload["scamDetected"] is True
@@ -15,8 +19,7 @@ def test_build_payload():
     assert payload["extractedIntelligence"]["phoneNumbers"] == ["123"]
 
 @patch("app.core.guvi_callback.Queue")
-@patch("app.core.guvi_callback.get_redis")
-def test_enqueue_guvi_final_result(mock_get_redis, mock_queue_class):
+def test_enqueue_guvi_final_result(mock_queue_class):
     mock_queue = MagicMock()
     mock_queue_class.return_value = mock_queue
     

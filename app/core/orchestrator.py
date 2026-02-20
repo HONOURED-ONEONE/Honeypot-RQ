@@ -186,14 +186,37 @@ def handle_event(req):
     # --- Red-flag tagger (deterministic, per latest scammer message) ---
     # Store on session for rotation and for debugging/observability.
     try:
-        rf = choose_red_flag(latest_text, getattr(session, "redFlagHistory", []) or [])
+        # Escalation heuristic: if we are already in a stuck/looping regime, use tech_friction/delay persona.
+        try:
+            esc = (
+                int(getattr(session, "bf_no_progress_count", 0) or 0) >= int(getattr(settings, "BF_NO_PROGRESS_TURNS", 3) or 3)
+                or int(getattr(session, "bf_repeat_count", 0) or 0) >= int(getattr(settings, "BF_REPEAT_LIMIT", 2) or 2)
+                or (str(getattr(session, "bf_state", "")) in ("BF_S4", "BF_S5"))
+            )
+        except Exception:
+            esc = False
+
+        rf = choose_red_flag(
+            latest_text,
+            getattr(session, "redFlagHistory", []) or [],
+            escalation=bool(esc),
+            recent_styles=getattr(session, "personaStyleHistory", []) or [],
+        )
         session.lastRedFlagTag = rf.tag
         hist = list(getattr(session, "redFlagHistory", []) or [])
         hist.append(rf.tag)
         session.redFlagHistory = hist[-10:]
+        # Persist persona style for rotation/debug
+        try:
+            session.lastPersonaStyle = getattr(rf, "style", None)
+            sh = list(getattr(session, "personaStyleHistory", []) or [])
+            if session.lastPersonaStyle:
+                sh.append(session.lastPersonaStyle)
+            session.personaStyleHistory = sh[-10:]
+        except Exception:
+            pass
     except Exception:
-        rf = None
-
+        rf = None    
     controller_out = choose_next_action(
         session=session,
         latest_text=req.message.text or "",
@@ -256,8 +279,8 @@ def handle_event(req):
         intent=intent,
         instruction=instruction,
         red_flag_prefix=(rf.prefix if rf else ""),
+        persona_style=(getattr(rf, "style", "") if rf else ""),
     )
-
     # ------------------------------------------------------------
     # Anti-redundancy: reply similarity guard (one retry pivot)
     # ------------------------------------------------------------

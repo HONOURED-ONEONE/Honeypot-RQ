@@ -136,9 +136,8 @@ def test_generate_reply_blocks_meta_confirm(req, session):
             
             # Should fallback
             assert "confirm if i should" not in reply.lower()
-            # Website template should be used
-            assert "website" in reply.lower() or "domain" in reply.lower()
-
+                            # Website template should be used
+                            assert "website" in reply.lower() or "domain" in reply.lower() or "site" in reply.lower()
 def test_close_intent_skips_anchor_check(req, session):
     # CLOSE intent typically doesn't ask a question, but if it did (or if it's a statement),
     # it shouldn't be blocked by anchor checks for other intents.

@@ -341,13 +341,18 @@ def choose_next_action(
     # Correct definition: "new intel" iff signature changed since last turn.
     # Do NOT treat "any existing intel" as new every turn, or no-progress never triggers.
     prev_sig = getattr(session, "bf_last_ioc_signature", None)
+    
     if not prev_sig:
-        prev_sig = new_signature
-        session.bf_last_ioc_signature = prev_sig
-    new_intel_received = (new_signature != prev_sig)
+        # First turn or previously empty: treat as new to initialize state/counters
+        session.bf_last_ioc_signature = new_signature
+        new_intel_received = True
+    else:
+        new_intel_received = (new_signature != prev_sig)
+        if new_intel_received:
+            session.bf_last_ioc_signature = new_signature
+
     if new_intel_received:
         session.bf_no_progress_count = 0
-        session.bf_last_ioc_signature = new_signature
     else:
         session.bf_no_progress_count += 1
 

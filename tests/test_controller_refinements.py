@@ -29,7 +29,7 @@ def test_escalation_on_sustained_no_progress():
     intel = {"phoneNumbers": [], "upiIds": [], "bankAccounts": [], "phishingLinks": []}
     
     action = choose_next_action(session, "hello", intel, {}, settings)
-    # Should have escalated to BF_S4
+    # Should have escalated to BF_S4 (or BF_S5 if threshold is low and double-triggered)
     assert session.bf_state == BF_S4
 
 def test_ack_repetition_guard_pivots_away():

@@ -8,10 +8,9 @@ def test_system_prompt_updates():
     # Verify that the system prompt file has been updated with STYLE tokens and STRICT ARTIFACT FOCUS
     with open("app/llm/prompts/agent_system.txt", "r") as f:
         content = f.read()
-        assert "[STYLE:FEIGNED]" in content
-        assert "[STYLE:GREED]" in content
-        assert "STRICT ARTIFACT FOCUS" in content
-        assert "Ask ONLY about that single artifact" in content
+        assert "PERSONA_STYLE" in content
+        assert "PERSONA STYLE GUIDANCE" in content
+        assert "STRICT SINGLE-ARTIFACT RULE" in content
 
 @patch("app.llm.responder.chat_completion")
 @patch("app.llm.responder.settings")

@@ -18,7 +18,8 @@ from typing import List, Optional, Tuple
 @dataclass(frozen=True)
 class RedFlag:
     tag: str
-    prefix: str  # statement (no question mark), safe and non-procedural
+    prefix: str  # persona cue statement (no question mark), safe and non-procedural
+    style: str   # "CONFUSION" | "SKEPTICAL" | "TECH_FRICTION" | "DELAY"
 
 
 # Priority order matters: pick the FIRST match (strongest) to keep it deterministic.
@@ -35,7 +36,12 @@ _IMPERSONATION_RE = re.compile(
 _URGENCY_RE = re.compile(r"\b(urgent|immediately|right now|within|minutes|hours|deadline)\b", re.I)
 
 
-def choose_red_flag(latest_text: str, recent_tags: Optional[List[str]] = None) -> RedFlag:
+def choose_red_flag(
+    latest_text: str,
+    recent_tags: Optional[List[str]] = None,
+    escalation: bool = False,
+    recent_styles: Optional[List[str]] = None,
+) -> RedFlag:
     """
     Pick a single red-flag from latest_text, with optional rotation:
     if the best tag was used very recently, and another strong tag also matches,
@@ -57,7 +63,10 @@ def choose_red_flag(latest_text: str, recent_tags: Optional[List[str]] = None) -
     # Filter matches in order
     matched = [tag for tag, ok in candidates if ok]
     if not matched:
-        return RedFlag(tag="NONE", prefix="This message has some unusual pressure cues.")
+        # Neutral but still human; prefer confusion in normal mode, delay in escalation.
+        if escalation:
+            return RedFlag(tag="NONE", prefix="I may need a moment before I can check this properly.", style="DELAY")
+        return RedFlag(tag="NONE", prefix="I’m a bit unsure about this message.", style="CONFUSION")
 
     # Rotation: avoid repeating the same tag in the last 2 turns if possible
     if matched[0] in recent[-2:] and len(matched) > 1:
@@ -65,14 +74,115 @@ def choose_red_flag(latest_text: str, recent_tags: Optional[List[str]] = None) -
     else:
         chosen = matched[0]
 
-    # Safe, non-procedural prefixes (no steps, no navigation, no threats)
-    prefixes = {
-        "OTP_REQUEST": "Requesting an OTP or PIN over chat is a red flag.",
-        "PAYMENT_REQUEST": "Asking for payments or transfers in a hurry is a red flag.",
-        "SUSPICIOUS_LINK": "A verification link in a pressure message is suspicious.",
-        "THREAT_PRESSURE": "Threats about blocking or locking the account are a red flag.",
-        "IMPERSONATION_CLAIM": "Claiming to be an official team without proof is suspicious.",
-        "URGENCY_PRESSURE": "Creating urgency to rush action is a common red flag.",
-        "NONE": "This message has some unusual pressure cues.",
+    # Persona style selection:
+    # - Behavioral flags: CONFUSION / SKEPTICAL
+    # - Escalation: TECH_FRICTION / DELAY
+    styles_recent = [x for x in (recent_styles or []) if isinstance(x, str)]
+    if escalation:
+        # rotate between TECH_FRICTION and DELAY to avoid repetition
+        style = "TECH_FRICTION" if (not styles_recent or styles_recent[-1] != "TECH_FRICTION") else "DELAY"
+    else:
+        style = "SKEPTICAL" if (not styles_recent or styles_recent[-1] != "SKEPTICAL") else "CONFUSION"
+
+    # Cue lines: reference scammer request/behavior, without saying “red flag(s)”.
+    CUES = {
+        "OTP_REQUEST": {
+            "CONFUSION": [
+                "I’m not comfortable sharing an OTP on chat.",
+                "I’m a bit unsure why an OTP is needed here.",
+            ],
+            "SKEPTICAL": [
+                "I don’t usually share OTPs over messages.",
+                "An OTP request on chat makes me hesitant.",
+            ],
+            "TECH_FRICTION": [
+                "My phone is acting up and I can’t check messages properly right now.",
+            ],
+            "DELAY": [
+                "I may need a little time before I can look into this.",
+            ],
+        },
+        "THREAT_PRESSURE": {
+            "CONFUSION": [
+                "That ‘blocked in minutes’ warning is making me unsure.",
+                "I’m confused why this needs to happen immediately.",
+            ],
+            "SKEPTICAL": [
+                "I’m hesitant when I see lock/block threats in a message.",
+                "This kind of urgency doesn’t feel right to me.",
+            ],
+            "TECH_FRICTION": [
+                "The network is unstable here, so I can’t check things quickly.",
+            ],
+            "DELAY": [
+                "I’ll need a moment before I can respond further.",
+            ],
+        },
+        "IMPERSONATION_CLAIM": {
+            "CONFUSION": [
+                "I’m not sure how to verify someone’s role through chat.",
+            ],
+            "SKEPTICAL": [
+                "I’m cautious about role claims made in messages.",
+            ],
+            "TECH_FRICTION": [
+                "My connection is patchy right now, so I can’t verify this smoothly.",
+            ],
+            "DELAY": [
+                "I may need some time before I can confirm anything.",
+            ],
+        },
+        "SUSPICIOUS_LINK": {
+            "CONFUSION": [
+                "I’m unsure about opening a link from a message like this.",
+            ],
+            "SKEPTICAL": [
+                "I’m cautious about clicking links sent under pressure.",
+            ],
+            "TECH_FRICTION": [
+                "Links aren’t loading on my phone right now.",
+            ],
+            "DELAY": [
+                "I can check links a bit later when I have stable access.",
+            ],
+        },
+        "PAYMENT_REQUEST": {
+            "CONFUSION": [
+                "I’m unsure why a payment or transfer is being mentioned here.",
+            ],
+            "SKEPTICAL": [
+                "I don’t want to do any transfer based on a message.",
+            ],
+            "TECH_FRICTION": [
+                "My phone is lagging, so I can’t check payment screens right now.",
+            ],
+            "DELAY": [
+                "I’ll need time before I can check anything related to payments.",
+            ],
+        },
+        "URGENCY_PRESSURE": {
+            "CONFUSION": [
+                "I’m a bit unsure with this time pressure.",
+            ],
+            "SKEPTICAL": [
+                "I’m hesitant when I’m asked to act immediately.",
+            ],
+            "TECH_FRICTION": [
+                "My network is slow, so I can’t do quick checks right now.",
+            ],
+            "DELAY": [
+                "I may need a moment before I can respond.",
+            ],
+        },
+        "NONE": {
+            "CONFUSION": ["I’m not sure about this message."],
+            "SKEPTICAL": ["I’m being cautious with this message."],
+            "TECH_FRICTION": ["My connection is unstable right now."],
+            "DELAY": ["I may need a little time."],
+        },
     }
-    return RedFlag(tag=chosen, prefix=prefixes.get(chosen, prefixes["NONE"]))
+
+    pool = CUES.get(chosen, CUES["NONE"]).get(style, CUES["NONE"]["CONFUSION"])
+    # deterministic-ish rotation: pick the first cue unless it repeats the last style cue
+    prefix = pool[0] if pool else "I’m being cautious with this message."
+    return RedFlag(tag=chosen, prefix=prefix, style=style)
