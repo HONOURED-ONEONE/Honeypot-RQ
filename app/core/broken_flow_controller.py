@@ -1,5 +1,3 @@
-import hashlib
-import json
 from typing import Dict, Any, List
 
 from app.core.broken_flow_constants import *
@@ -8,6 +6,8 @@ from app.store.models import SessionState
 from app.core.finalize import should_finalize
 from app.intel.artifact_registry import artifact_registry
 from app.settings import settings as default_settings
+import hashlib
+import json
 
 
 # ---------------------------------------------------------------------------
@@ -28,6 +28,29 @@ DEFAULT_ARTIFACT_INTENT_MAP = {
     "upiIds": INT_ASK_ALT_VERIFICATION,
     "bankAccounts": INT_CHANNEL_FAIL,
 }
+
+# --------------------------------------------
+# Scam-aware "expected IOC" sets (heuristic)
+# --------------------------------------------
+# Used for prioritization and to avoid early finalize.
+# This is NOT a hard requirement; we still terminate on
+# no-progress/repeat/max-turns to ensure completion.
+EXPECTED_IOCS_BY_SCAMTYPE = {
+    "BANK_IMPERSONATION": ["phoneNumbers", "bankAccounts", "caseIds"],
+    "UPI_FRAUD":          ["upiIds", "phoneNumbers", "caseIds"],
+    "PHISHING":           ["phishingLinks", "emailAddresses", "orderNumbers"],
+    "JOB_SCAM":           ["phoneNumbers", "upiIds", "policyNumbers"],
+}
+
+def _expected_iocs_covered(intel_dict: Dict[str, Any], scam_type: str) -> bool:
+    exp = EXPECTED_IOCS_BY_SCAMTYPE.get((scam_type or "UNKNOWN").upper(), [])
+    if not exp:
+        return False
+    for k in exp:
+        vals = intel_dict.get(k) or []
+        if not (isinstance(vals, list) and len(vals) > 0):
+            return False
+    return True
 
 # Repetition control / progression helpers
 # Allowed intents that directly support artifact progress or safe control surfaces
@@ -341,11 +364,22 @@ def choose_next_action(
         # Milestone finalize: if IOC categories meet threshold and scamDetected is true, request close now.
         try:
             ioc_cnt = _ioc_category_count_from_dict(intel_dict)
-            if ioc_cnt >= settings.FINALIZE_MIN_IOC_CATEGORIES and getattr(session, "scamDetected", False):
-                intent = INT_CLOSE_AND_VERIFY_SELF
-                target_key = None
-                force_finalize = True
-                reason = "ioc_milestone_ready"
+            scam_ok = bool(getattr(session, "scamDetected", False))
+            turns  = int(getattr(session, "turnIndex", 0) or 0)
+            # New gating: prefer closing only after expected IOC coverage AND min turns,
+            # while still allowing deterministic termination (no-progress/repeat/max-turns elsewhere).
+            if scam_ok:
+                exp_cov = _expected_iocs_covered(intel_dict, session.scam_type)
+                if exp_cov and turns >= 8:
+                    intent = INT_CLOSE_AND_VERIFY_SELF
+                    target_key = None
+                    force_finalize = True
+                    reason = "expected_iocs_covered"
+                elif ioc_cnt >= settings.FINALIZE_MIN_IOC_CATEGORIES and turns >= 8:
+                    intent = INT_CLOSE_AND_VERIFY_SELF
+                    target_key = None
+                    force_finalize = True
+                    reason = "ioc_min_count_and_turns"
         except Exception:
             pass
 

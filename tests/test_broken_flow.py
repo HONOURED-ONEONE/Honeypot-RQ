@@ -112,6 +112,13 @@ def test_pick_missing_intel_logic():
     assert _pick_missing_intel_intent(intel, []) == INT_ASK_OFFICIAL_HELPLINE
     
     intel["phoneNumbers"] = ["123"]
+    # New artifacts (Case/Policy/Order) have higher priority (8/7/6) than Bank (5)
+    # but default to INT_ACK_CONCERN. To reach Bank (INT_CHANNEL_FAIL), we must
+    # simulate that these are also present.
+    intel["caseIds"] = ["CASE1"]
+    intel["policyNumbers"] = ["POL1"]
+    intel["orderNumbers"] = ["ORD1"]
+    
     assert _pick_missing_intel_intent(intel, []) == INT_CHANNEL_FAIL
 
     intel["bankAccounts"] = ["123456789012"]

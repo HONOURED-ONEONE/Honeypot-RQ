@@ -21,6 +21,8 @@ from app.observability.logging import log
 from app.settings import settings as app_settings
 from app.core.guvi_callback import enqueue_guvi_final_result # ✅ NEW
 from app.intel.extractor import update_intelligence_from_text  # ✅ P0.1: registry-driven extraction
+from app.core.guarded_config import begin_session_overlay, end_session_overlay  # ✅ NEW (session-scoped config)
+from datetime import datetime
 
 
 def _coerce_history_items(history: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -124,6 +126,10 @@ def handle_event(req):
     # Controller
     # ✅ NEW: Flatten dynamicArtifacts so controller/finalize see runtime IOC keys
     try:
+        # --- SESSION OVERLAY START (LLM-suggested, session-scoped rules) ---
+        # Ensures any rule changes (intent-map/dynamic artifacts) apply
+        # only to this session/turn and are reset afterward.
+        begin_session_overlay(session.sessionId)
         intel_dict = dict(session.extractedIntelligence.__dict__ or {})
         dyn = intel_dict.pop("dynamicArtifacts", None)
         if isinstance(dyn, dict):
@@ -174,6 +180,29 @@ def handle_event(req):
         # Non-influential; continue even if append fails
         pass
 
+    # --- Update engagement metrics on session for callback ---
+    try:
+        # first scammer timestamp
+        first_ts = None
+        for m in session.conversation:
+            if (m.get("sender") == "scammer") and m.get("timestamp"):
+                first_ts = m["timestamp"]
+                break
+        # last agent reply timestamp
+        last_ts = None
+        for m in reversed(session.conversation):
+            if (m.get("sender") == "user") and m.get("timestamp"):
+                last_ts = m["timestamp"]
+                break
+        if isinstance(first_ts, (int, float)) and isinstance(last_ts, (int, float)) and last_ts >= first_ts:
+            session.engagementDurationSeconds = int((last_ts - first_ts) / 1000)
+        else:
+            # best-effort fallback: zero
+            session.engagementDurationSeconds = int(getattr(session, "engagementDurationSeconds", 0) or 0)
+    except Exception:
+        # retain existing value if any
+        pass
+
     # --- Mandatory Callback Trigger (PS-2) ---
     # Only when scamDetected is true and finalization condition is met
     # Ensure it triggers exactly once.
@@ -203,6 +232,13 @@ def handle_event(req):
             totalMessagesExchanged=getattr(session, "turnIndex", 0),
         )
     except Exception:
+        pass
+
+    # --- SESSION OVERLAY END (restore global state) ---
+    try:
+        end_session_overlay()
+    except Exception:
+        # ensure no leakage even if overlay end fails
         pass
 
     # PS-2 API output should be: {"status":"success","reply":"..."} (routes adds status)

@@ -17,6 +17,17 @@ class ArtifactSpec:
     passive_only: bool = False
     enabled: bool = True
 
+# -----------------
+# New ID-like Regex
+# -----------------
+# Conservative patterns with explicit prefixes to reduce false positives.
+# Case IDs: REF/CASE/TICKET + 4–12 A-Z0-9
+# Policy: POLICY/POL/INS + 6–16 A-Z0-9
+# Order: ORDER/ORD + 6–16 A-Z0-9
+CASE_ID_RE   = re.compile(r"\b(?:REF|CASE|TICKET)[-_:\s]?[A-Z0-9]{4,12}\b", re.I)
+POLICY_RE    = re.compile(r"\b(?:POLICY|POL|INS)[-_:\s]?[A-Z0-9]{6,16}\b", re.I)
+ORDER_ID_RE  = re.compile(r"\b(?:ORDER|ORD)[-_:\s]?[A-Z0-9]{6,16}\b", re.I)
+
 # Regexes from existing extractor.py
 UPI_RE = re.compile(r"\b[a-zA-Z0-9.\-_]{2,64}@[a-zA-Z]{2,32}\b")
 # ✅ Robust single-pattern URL extractor (http(s)://… or www.…)
@@ -319,4 +330,29 @@ artifact_registry.register(ArtifactSpec(
     normalize_fn=normalize_bank,
     priority=5,
     conflicts_with=["phoneNumbers"]
+))
+
+# ✅ NEW: Case IDs / Policy Numbers / Order Numbers
+def _upper(s: str) -> str:
+    return (s or "").strip().upper()
+
+artifact_registry.register(ArtifactSpec(
+    key="caseIds",
+    extract_fn=lambda t: CASE_ID_RE.findall(t or ""),
+    normalize_fn=_upper,
+    priority=8
+))
+
+artifact_registry.register(ArtifactSpec(
+    key="policyNumbers",
+    extract_fn=lambda t: POLICY_RE.findall(t or ""),
+    normalize_fn=_upper,
+    priority=7
+))
+
+artifact_registry.register(ArtifactSpec(
+    key="orderNumbers",
+    extract_fn=lambda t: ORDER_ID_RE.findall(t or ""),
+    normalize_fn=_upper,
+    priority=6
 ))

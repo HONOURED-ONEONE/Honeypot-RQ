@@ -9,6 +9,10 @@ class Intelligence:
     phoneNumbers: List[str] = field(default_factory=list)
     # ✅ NEW: First-class support for emails (recognized in evaluation)
     emailAddresses: List[str] = field(default_factory=list)
+    # ✅ NEW: ID-like categories from updated rubric (scored as intelligence)
+    caseIds: List[str] = field(default_factory=list)
+    policyNumbers: List[str] = field(default_factory=list)
+    orderNumbers: List[str] = field(default_factory=list)
     # ✅ P0.2: Required by callback payload and evaluation docs
     suspiciousKeywords: List[str] = field(default_factory=list)
     # ✅ NEW: Runtime IOC add-ons (key -> list[str])
@@ -39,6 +43,11 @@ class SessionState:
     agentNotes: str = ""
     callbackStatus: str = "none"  # none/queued/sent/failed
     lastUpdatedAtEpoch: Optional[int] = None
+
+    # Engagement metrics (for callback/reporting)
+    engagementDurationSeconds: int = 0
+    # Optional reporting fields (Response Structure bonus)
+    confidenceLevel: float = 0.0
 
     # Broken-Flow state + counters
     bf_state: str = "BF_S0"

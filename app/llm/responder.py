@@ -39,7 +39,7 @@ INTENTS_ALLOW_3_SENTENCES = {
 }
 
 # ---------------------------------------------------------------------------
-# Templates (intent-driven only; no tactics, no procedures)
+# Templates (intent-driven only; no tactics, no procedures). Updated with subtle red-flag references.
 # Each template is a list of candidate strings.
 # ---------------------------------------------------------------------------
 
@@ -51,39 +51,30 @@ INTENT_TEMPLATES: Dict[str, List[str]] = {
     ],
 
     INT_REFUSE_SENSITIVE_ONCE: [
-        "I understand the urgency, but I can’t share OTP or PIN on chat. "
-        "Which official channel should I use to verify this?",
-        "I’m worried about my account, but I won’t share OTP or PIN here. "
-        "What is the official way to check this myself?",
-        "I want to verify this safely and I can’t share OTP or PIN. "
-        "Which official contact should I use?",
+        # Subtle red‑flag reference: OTP/PIN
+        "Since this involves an OTP request, I can’t share OTP or PIN here. Which official channel should I use to verify this?",
+        "I’m concerned about the OTP being requested on chat. What is the official way to check this myself?",
+        "I want to verify this safely and won’t share OTP or PIN here. Which official contact should I use?",
     ],
 
     INT_CHANNEL_FAIL: [
-        "The page isn’t opening on my phone right now. "
-        "Which official page should I try instead?",
-        "I’m seeing an error while trying to check this. "
-        "What official place should I look at?",
-        "The link doesn’t seem to load here. "
-        "Which official site should I open directly?",
+        "The page isn’t opening on my phone right now. Which official page should I try instead?",
+        "I’m seeing an error while trying to check this. What official place should I look at?",
+        "The link doesn’t seem to load here. Which official site should I open directly?",
     ],
 
     INT_ASK_OFFICIAL_WEBSITE: [
-        "I want to verify this properly. "
-        "What is the official website or domain I should check?",
-        "I’d rather confirm this myself. "
-        "Which official website should I open?",
-        "I’m trying to check this independently. "
-        "What is the correct official site?",
+        # Subtle red‑flag reference: suspicious link concerns
+        "Before opening any link, I want to verify properly. What is the official website or domain I should check?",
+        "I’d rather confirm this myself to avoid a wrong link. Which official website should I open?",
+        "I’m trying to check this independently instead of using the link sent. What is the correct official site?",
     ],
 
     INT_ASK_OFFICIAL_HELPLINE: [
-        "I want to confirm this directly. "
-        "What is the official helpline number I should call?",
-        "I’d like to verify this by phone. "
-        "Which official helpline should I contact?",
-        "I’m more comfortable confirming by calling. "
-        "What is the official support number?",
+        # Subtle red‑flag reference: urgency → prefer official call
+        "You mentioned this is urgent; I’d like to confirm directly. What is the official helpline number I should call?",
+        "Given the urgency, I prefer to verify by phone. Which official helpline should I contact?",
+        "Since this seems time‑sensitive, I’d rather call. What is the official support number?",
     ],
 
     INT_ASK_TICKET_REF: [
@@ -105,21 +96,16 @@ INTENT_TEMPLATES: Dict[str, List[str]] = {
     ],
 
     INT_ASK_ALT_VERIFICATION: [
-        "I’m not receiving messages right now. "
-        "Is there another official way to verify this?",
-        "I can’t get SMS on my phone currently. "
-        "What alternate official method can I use?",
-        "Messages aren’t coming through here. "
-        "Is there a different official verification option?",
+        # Subtle red‑flag reference: fees/charges + payment link concerns
+        "I’m not comfortable with any fees or charges link on chat. Is there another official way to verify this?",
+        "I can’t get SMS on my phone currently and I prefer no payment links here. What alternate official method can I use?",
+        "Messages aren’t coming through, and I don’t want to click a payment link. Is there a different official verification option?",
     ],
 
     INT_SECONDARY_FAIL: [
-        "I’m still unable to complete this on my side. "
-        "Is there another official option to check this?",
-        "This doesn’t seem to be working for me yet. "
-        "What other official channel can I try?",
-        "I’m facing issues again while checking this. "
-        "Is there an alternate official route?",
+        "I’m still unable to complete this on my side. Is there another official option to check this?",
+        "This doesn’t seem to be working for me yet. What other official channel can I try?",
+        "I’m facing issues again while checking this. Is there an alternate official route?",
     ],
 
     INT_CLOSE_AND_VERIFY_SELF: [
