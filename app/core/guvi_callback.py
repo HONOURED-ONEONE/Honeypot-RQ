@@ -12,12 +12,17 @@ def enqueue_guvi_final_result(session, finalize_reason: Optional[str] = None) ->
     which builds the versioned payload, validates it, logs callback_payload_preview,
     and posts to the evaluator.
     """
-    # Persist finalize_reason into agentNotes if it is empty (optional, best‑effort)
+    # Persist finalize_reason into agentNotes (append; avoid duplicates)
     try:
         if finalize_reason:
+            line = f"finalize_reason={finalize_reason}"
             notes = (getattr(session, "agentNotes", "") or "").strip()
             if not notes:
-                session.agentNotes = f"finalize_reason={finalize_reason}"
+                session.agentNotes = line
+            else:
+                # Append only if not already present
+                if line not in notes:
+                    session.agentNotes = notes + " | " + line
     except Exception:
         pass
     # Enqueue the new job (do NOT call the HTTP poster directly here)

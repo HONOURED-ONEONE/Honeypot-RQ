@@ -1,7 +1,38 @@
 import time
+from datetime import datetime, timezone
 
 def now_ms() -> int:
     return int(time.time() * 1000)
+
+def parse_timestamp_ms(ts) -> int:
+    """
+    Normalize timestamps to epoch milliseconds (int).
+    Accepts:
+    - int/float: treated as epoch ms (or seconds if suspiciously small)
+    - ISO-8601 string: parsed via datetime.fromisoformat (supports trailing 'Z')
+    Fallback: current time in ms.
+    """
+    try:
+        if ts is None:
+            return now_ms()
+        if isinstance(ts, (int, float)):
+            v = int(ts)
+            # Heuristic: if looks like seconds (< 10^12), convert to ms.
+            return v * 1000 if v > 0 and v < 10**12 else v
+        if isinstance(ts, str):
+            s = ts.strip()
+            if not s:
+                return now_ms()
+            # Support Zulu time
+            if s.endswith("Z"):
+                s = s[:-1] + "+00:00"
+            dt = datetime.fromisoformat(s)
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            return int(dt.timestamp() * 1000)
+    except Exception:
+        pass
+    return now_ms()
 
 def compute_engagement_seconds(conversation: list[dict]) -> int:
     """
@@ -17,7 +48,7 @@ def compute_engagement_seconds(conversation: list[dict]) -> int:
     last_agent_ts = None
     last_any_ts = None
     for item in conversation:
-        ts = int(item.get("timestamp") or 0)
+        ts = parse_timestamp_ms(item.get("timestamp"))
         sender = (item.get("sender") or "").lower()
         if sender == "scammer" and scammer_ts is None and ts > 0:
             scammer_ts = ts

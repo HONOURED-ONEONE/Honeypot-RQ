@@ -43,13 +43,11 @@ def should_finalize(session) -> Optional[str]:
     if session.state in ("READY_TO_REPORT", "REPORTED", "CLOSED"):
         return None
 
-    # ✅ P1.3: Hard stop so evaluation sessions don't run past typical max turns.
-    # This helps ensure the mandatory final callback can trigger within the evaluator's budget.
-    try:
-        if int(getattr(session, "turnIndex", 0) or 0) >= int(getattr(settings, "BF_MAX_TURNS", 10) or 10):
-            return "max_turns_reached"
-    except Exception:
-        pass
+    # NOTE: No hard max-turn finalize.
+    # Long, human-like conversations can be rewarded; finalization is driven by:
+    # - IOC milestone OR
+    # - no-progress threshold OR
+    # - repeat threshold
 
     # 1. SCAM DETECTED + MIN IOC CATEGORIES (Registry-based)
     # INVARIANT: Completion requires verifiable artifact extraction.

@@ -2,6 +2,7 @@ from app.store.models import SessionState
 from app.settings import settings
 from app.utils.time import now_ms, compute_engagement_seconds
 import json, hashlib
+from app.core.notes import build_agent_notes
 
 def build_final_payload(session: SessionState) -> dict:
     intel = session.extractedIntelligence
@@ -30,7 +31,6 @@ def build_final_payload(session: SessionState) -> dict:
         "caseIds": intel.caseIds,
         "policyNumbers": intel.policyNumbers,
         "orderNumbers": intel.orderNumbers,
-        "suspiciousKeywords": getattr(intel, "suspiciousKeywords", []),
     }
     
     # Ensure ID-like categories are present (empty lists if none) to avoid evaluator misses
@@ -41,20 +41,60 @@ def build_final_payload(session: SessionState) -> dict:
 
     if getattr(settings, "INCLUDE_DYNAMIC_ARTIFACTS_CALLBACK", False):
         ei["dynamicArtifacts"] = getattr(intel, "dynamicArtifacts", {}) or {}
-    extracted["extractedIntelligence"] = ei
-    extracted["agentNotes"] = session.agentNotes or "Scammer used social engineering cues."
 
-    # ---- Group D: add payload version + fingerprint (canonical, stable ordering)
-    extracted["payloadVersion"] = getattr(settings, "CALLBACK_PAYLOAD_VERSION", "1.0.0")
+    # Move keyword signals under a nested container to keep non-core keys scoped
+    # strictly inside extractedIntelligence (and avoid polluting the top-level EI keys).
+    try:
+        sig = ei.get("_signals")
+        if not isinstance(sig, dict):
+            sig = {}
+        sig["suspiciousKeywords"] = list(getattr(intel, "suspiciousKeywords", []) or [])
+        ei["_signals"] = sig
+    except Exception:
+        pass
+
+    # ---- Extra keys allowed ONLY inside extractedIntelligence (per constraint) ----
+    # Keep payload contract metadata here (not top-level).
+    try:
+        meta = {
+            "payloadVersion": getattr(settings, "CALLBACK_PAYLOAD_VERSION", "1.0.0"),
+        }
+        ei["_meta"] = meta
+    except Exception:
+        pass
+
+    extracted["extractedIntelligence"] = ei
+    # agentNotes: prefer explicitly stored notes; else build from persisted detector fields
+    try:
+        notes = (session.agentNotes or "").strip()
+        if not notes:
+            det = {
+                "scamType": (session.scamType or ""),
+                "reasons": list(getattr(session, "detectorReasons", []) or []),
+            }
+            notes = build_agent_notes(det)
+        extracted["agentNotes"] = notes or "Scam-like patterns detected."
+    except Exception:
+        extracted["agentNotes"] = session.agentNotes or "Scam-like patterns detected."
+
     try:
         algo = getattr(settings, "PAYLOAD_FINGERPRINT_ALGO", "sha256").lower()
         canonical = json.dumps(extracted, sort_keys=True, separators=(",", ":"))
         h = hashlib.new(algo)
         h.update(canonical.encode("utf-8"))
-        extracted["payloadFingerprint"] = f"{algo}:{h.hexdigest()}"
+        # Store fingerprint under extractedIntelligence._meta (allowed zone)
+        try:
+            extracted["extractedIntelligence"].setdefault("_meta", {})
+            extracted["extractedIntelligence"]["_meta"]["payloadFingerprint"] = f"{algo}:{h.hexdigest()}"
+        except Exception:
+            pass
     except Exception:
         # keep payload even if hashing fails
-        extracted["payloadFingerprint"] = "na"
+        try:
+            extracted["extractedIntelligence"].setdefault("_meta", {})
+            extracted["extractedIntelligence"]["_meta"]["payloadFingerprint"] = "na"
+        except Exception:
+            pass
     return extracted
 
 def validate_final_payload(payload: dict) -> (bool, str):
@@ -70,8 +110,6 @@ def validate_final_payload(payload: dict) -> (bool, str):
             ("totalMessagesExchanged", int),
             ("engagementDurationSeconds", int),
             ("extractedIntelligence", dict),
-            ("payloadVersion", str),
-            ("payloadFingerprint", str),
         ]
         for k, v in req:
             if k not in payload:
@@ -87,6 +125,19 @@ def validate_final_payload(payload: dict) -> (bool, str):
         for name in ("phoneNumbers", "phishingLinks", "upiIds", "bankAccounts", "emailAddresses"):
             if name in ei and not isinstance(ei.get(name), list):
                 return False, f"type:ei.{name}"
+
+        # Optional: _signals container (where suspiciousKeywords live)
+        if "_signals" in ei and not isinstance(ei.get("_signals"), dict):
+            return False, "type:ei._signals"
+        if isinstance(ei.get("_signals"), dict):
+            sk = ei["_signals"].get("suspiciousKeywords")
+            if sk is not None and not isinstance(sk, list):
+                return False, "type:ei._signals.suspiciousKeywords"
+
+        # Optional: _meta must be dict if present (extras allowed here)
+        if "_meta" in ei and not isinstance(ei.get("_meta"), dict):
+            return False, "type:ei._meta"
+
         return True, "ok"
     except Exception as e:
         return False, f"exception:{type(e).__name__}"

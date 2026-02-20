@@ -27,6 +27,7 @@ from app.core.red_flags import choose_red_flag
 import re
 import hashlib
 from datetime import datetime
+from app.utils.time import parse_timestamp_ms, now_ms
 
 
 def _coerce_history_items(history: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -36,17 +37,14 @@ def _coerce_history_items(history: List[Dict[str, Any]]) -> List[Dict[str, Any]]
     Defensive against missing/odd fields.
     """
     out: List[Dict[str, Any]] = []
-    now_ms = int(time.time() * 1000)
+    now_ms_val = now_ms()
     for m in history or []:
         try:
             sender = (m.get("sender") or "scammer")
             text = (m.get("text") or "")
             ts = m.get("timestamp")
-            # Accept either epoch ms or iso strings; if absent, use now.
-            if isinstance(ts, (int, float)):
-                tsv = int(ts)
-            else:
-                tsv = now_ms
+            # Accept either epoch ms or ISO strings; normalize to epoch ms
+            tsv = parse_timestamp_ms(ts) if ts is not None else now_ms_val
             out.append({"sender": sender, "text": text, "timestamp": tsv})
         except Exception:
             # Skip malformed entries; keep the session stable
@@ -72,9 +70,9 @@ def handle_event(req):
 
     # ✅ P0.3: Persist the incoming message and increment counters
     try:
-        incoming_ts = req.message.timestamp
+        incoming_ts = parse_timestamp_ms(getattr(req.message, "timestamp", None))
     except Exception:
-        incoming_ts = int(time.time() * 1000)
+        incoming_ts = now_ms()
     try:
         session.conversation.append({
             "sender": getattr(req.message, "sender", "scammer"),
@@ -112,6 +110,28 @@ def handle_event(req):
         session.scamType = "UNKNOWN"
     # ✅ P1.1: Keep controller-facing alias in sync
     session.scam_type = session.scamType or "UNKNOWN"
+
+    # Persist detector reasons for better agentNotes later
+    try:
+        reasons = result.get("reasons") or []
+        if not isinstance(reasons, list):
+            reasons = [str(reasons)]
+        # Deduplicate while preserving order
+        seen = set()
+        clean = []
+        for r in reasons:
+            s = str(r).strip()
+            if s and s not in seen:
+                seen.add(s)
+                clean.append(s)
+        # Merge into session.detectorReasons (keep last ~12 unique)
+        prev = list(getattr(session, "detectorReasons", []) or [])
+        for r in clean:
+            if r not in prev:
+                prev.append(r)
+        session.detectorReasons = prev[-12:]
+    except Exception:
+        pass
 
     # ✅ P0.1: Intelligence extraction BEFORE controller/finalize
     #    - Extract from the latest incoming message

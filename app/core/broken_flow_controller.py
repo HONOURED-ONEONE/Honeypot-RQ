@@ -300,6 +300,7 @@ def choose_next_action(
     session.bf_recent_intents = getattr(session, "bf_recent_intents", [])
     session.bf_last_ioc_signature = getattr(session, "bf_last_ioc_signature", None)
     session.scam_type = getattr(session, "scam_type", "UNKNOWN")
+    session.bf_ack_used_count = int(getattr(session, "bf_ack_used_count", 0) or 0)
     recent = session.bf_recent_intents[-_RECENT_WINDOW:]
 
     # ------------------------------------------------------------
@@ -565,6 +566,22 @@ def choose_next_action(
             pass
 
         intent = _constrain(intent)
+
+        # ------------------------------------------------------------
+        # Fix B: ACK gating (allow INT_ACK_CONCERN at most once per session)
+        # ------------------------------------------------------------
+        if intent == INT_ACK_CONCERN:
+            if int(getattr(session, "bf_ack_used_count", 0) or 0) >= 1:
+                # Pivot away from ACK to a productive, IOC-eliciting intent
+                intent, target_key = _pick_missing_intel_target(
+                    intel_dict,
+                    session.bf_recent_intents,
+                    session.scam_type,
+                )
+                reason = "ack_gated_pivot"
+            else:
+                session.bf_ack_used_count = int(getattr(session, "bf_ack_used_count", 0) or 0) + 1
+                reason = reason or "ack_allowed_once"
 
         # ----------------------------
         # Group B: OTP pressure (even if phone exists)

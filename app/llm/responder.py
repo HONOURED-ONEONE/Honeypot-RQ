@@ -376,6 +376,31 @@ def _contains_meta_confirm(text: str) -> bool:
 def _count_questions(text: str) -> int:
     return text.count("?")
 
+
+def _requires_question(intent: str) -> bool:
+    return intent != INT_CLOSE_AND_VERIFY_SELF
+
+
+def _infer_intent_from_instruction(instruction: Optional[str]) -> str:
+    """
+    Best-effort mapping from instruction text to an investigative intent.
+    This keeps Fix A aligned with controller intent/instruction (minimizes 'responder decides what to ask').
+    """
+    t = (instruction or "").lower()
+    if any(k in t for k in ("helpline", "support number", "call", "phone")):
+        return INT_ASK_OFFICIAL_HELPLINE
+    if any(k in t for k in ("website", "domain", "site", "portal", "link")):
+        return INT_ASK_OFFICIAL_WEBSITE
+    if any(k in t for k in ("reference", "ticket", "case", "complaint", "id")):
+        return INT_ASK_TICKET_REF
+    if any(k in t for k in ("department", "branch", "office", "team")):
+        return INT_ASK_DEPARTMENT_BRANCH
+    if any(k in t for k in ("alternative", "alternate", "another", "different", "option", "method")):
+        return INT_ASK_ALT_VERIFICATION
+    # Default safe investigative surface
+    return INT_ASK_OFFICIAL_WEBSITE
+
+
 def _split_sentences(text: str) -> List[str]:
     parts = [p.strip() for p in re.split(r"(?<=[.!?])\s+", text) if p.strip()]
     return parts
@@ -463,6 +488,20 @@ def generate_agent_reply(
     # Enforce one-question rule
     if _count_questions(reply) > 1:
         reply = _safe_fallback(intent)
+
+    # Fix A: enforce at least one question for non-close replies.
+    # If the chosen intent yields a statement-only message (common with ACK),
+    # pivot to a best-fit investigative intent inferred from instruction.
+    if _requires_question(intent) and _count_questions(reply) == 0:
+        pivot_intent = _infer_intent_from_instruction(instruction)
+        reply = _safe_fallback(pivot_intent)
+        # Re-apply persona cue prefix if present (statement only; no '?')
+        try:
+            pfx = (red_flag_prefix or "").strip()
+            if pfx and pfx.lower() not in reply.lower():
+                reply = f"{pfx} {reply}".strip()
+        except Exception:
+            pass
 
     # Wording constraint 1: block vague/meta questions (not investigative)
     if _looks_vague_or_meta_question(reply):
@@ -566,6 +605,8 @@ def generate_agent_reply(
         reject_reason = None
         if not out:
             reject_reason = "empty"
+        elif _requires_question(intent) and _count_questions(out) == 0:
+            reject_reason = "no_question"
         elif _contains_forbidden(out):
             reject_reason = "forbidden_terms"
         elif _contains_meta_confirm(out):

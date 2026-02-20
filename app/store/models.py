@@ -35,6 +35,10 @@ class SessionState:
     confidence: float = 0.0
     scamType: Optional[str] = None
 
+    # --- Detector evidence (for agentNotes summarization) ---
+    # Persisted to make agentNotes deterministic and consistent across callback time.
+    detectorReasons: List[str] = field(default_factory=list)
+
     # Conversation storage
     conversation: List[dict] = field(default_factory=list)
     extractedIntelligence: Intelligence = field(default_factory=Intelligence)
@@ -59,6 +63,10 @@ class SessionState:
     bf_last_ioc_signature: str = ""
     bf_recent_intents: List[str] = field(default_factory=list)
     bf_fallback_used: bool = False
+
+    # --- Fix B: ACK gating ---
+    # Allow INT_ACK_CONCERN at most once per session to avoid low-yield loops.
+    bf_ack_used_count: int = 0
 
     # --- Red-flag state (Conversation Quality support) ---
     # lastRedFlagTag: single chosen tag for the latest scammer message

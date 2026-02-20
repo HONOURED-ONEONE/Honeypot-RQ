@@ -36,9 +36,15 @@ _POLICY_NO_RE = re.compile(
     r'(?<![A-Z0-9])(?:POL|POLICY)[-\s]?[A-Z0-9]{6,16}(?![A-Z0-9])',
     re.I
 )
-# ORDER: e.g., ORD-123456, PO-998877, ORDER-ABC123
+# ORDER:
+# - ORD / ORDER: allow alphanumerics 4–16 but REQUIRE at least one digit (prevents "PORTAL" type false positives)
+# - PO: require 4–16 digits after PO (purchase order numbers are typically numeric in scams)
 _ORDER_NO_RE = re.compile(
-    r'(?<![A-Z0-9])(?:ORD|ORDER|PO)[-\s]?[A-Z0-9]{4,16}(?![A-Z0-9])',
+    r'(?<![A-Z0-9])(?:'
+    r'(?:ORD|ORDER)[-\s]?(?=[A-Z0-9]{4,16}\b)(?=[A-Z0-9]*\d)[A-Z0-9]{4,16}'
+    r'|'
+    r'PO[-\s]?\d{4,16}'
+    r')(?![A-Z0-9])',
     re.I
 )
 
