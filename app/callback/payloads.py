@@ -3,12 +3,18 @@ from app.settings import settings
 from app.utils.time import now_ms, compute_engagement_seconds
 import json, hashlib
 from app.core.notes import build_agent_notes
+from app.callback.contract import sanitize_final_payload, validate_contract
 
 def build_final_payload(session: SessionState) -> dict:
     intel = session.extractedIntelligence
     
-    # Robust duration computed from persisted session timeline:
-    engagement_duration_seconds = compute_engagement_seconds(session.conversation or [])
+    # Robust duration:
+    # Prefer wall-clock first/last seen times; fall back to conversation timestamps.
+    engagement_duration_seconds = compute_engagement_seconds(
+        session.conversation or [],
+        first_seen_ms=int(getattr(session, "sessionFirstSeenAtMs", 0) or 0),
+        last_seen_ms=int(getattr(session, "sessionLastSeenAtMs", 0) or 0),
+    )
 
     extracted = {
         "sessionId": session.sessionId,
@@ -95,49 +101,23 @@ def build_final_payload(session: SessionState) -> dict:
             extracted["extractedIntelligence"]["_meta"]["payloadFingerprint"] = "na"
         except Exception:
             pass
-    return extracted
+
+    # Final step: sanitize/lock contract for evaluator scoring.
+    sanitized = sanitize_final_payload(extracted)
+
+    # Best-effort: ensure we didn't accidentally break the contract.
+    ok, _reason = validate_contract(sanitized)
+    if not ok:
+        # Even if validation fails (should be rare), return the sanitized payload anyway.
+        # The sender will re-sanitize again before POST.
+        return sanitized
+
+    return sanitized
 
 def validate_final_payload(payload: dict) -> (bool, str):
     """
     Minimal, dependency-free schema validation to catch shape drift before POST.
     Returns (ok, reason).
     """
-    try:
-        # Required top-level keys
-        req = [
-            ("sessionId", str),
-            ("scamDetected", bool),
-            ("totalMessagesExchanged", int),
-            ("engagementDurationSeconds", int),
-            ("extractedIntelligence", dict),
-        ]
-        for k, v in req:
-            if k not in payload:
-                return False, f"missing:{k}"
-            # allow int-like floats only for ints that are whole numbers
-            val = payload[k]
-            if v is int and isinstance(val, float) and val.is_integer():
-                continue
-            if not isinstance(val, v):
-                return False, f"type:{k}"
-        ei = payload.get("extractedIntelligence") or {}
-        # EI should contain lists for known keys; tolerate empties
-        for name in ("phoneNumbers", "phishingLinks", "upiIds", "bankAccounts", "emailAddresses"):
-            if name in ei and not isinstance(ei.get(name), list):
-                return False, f"type:ei.{name}"
-
-        # Optional: _signals container (where suspiciousKeywords live)
-        if "_signals" in ei and not isinstance(ei.get("_signals"), dict):
-            return False, "type:ei._signals"
-        if isinstance(ei.get("_signals"), dict):
-            sk = ei["_signals"].get("suspiciousKeywords")
-            if sk is not None and not isinstance(sk, list):
-                return False, "type:ei._signals.suspiciousKeywords"
-
-        # Optional: _meta must be dict if present (extras allowed here)
-        if "_meta" in ei and not isinstance(ei.get("_meta"), dict):
-            return False, "type:ei._meta"
-
-        return True, "ok"
-    except Exception as e:
-        return False, f"exception:{type(e).__name__}"
+    # Delegate to centralized contract validator to avoid drift across modules.
+    return validate_contract(payload)

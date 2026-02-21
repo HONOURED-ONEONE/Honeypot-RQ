@@ -5,6 +5,7 @@ from typing import Dict, Any, List, Tuple
 
 from app.settings import settings
 from app.llm.vllm_client import chat_completion
+from app.llm.signals import score_conversation, score_message
 
 logger = logging.getLogger("honeypot_detector")
 
@@ -41,87 +42,21 @@ def _extract_json(text: str) -> Dict[str, Any]:
     return obj
 
 
-# High-signal regexes (for fallback + borderline confirmation)
-# ✅ P1.2e v2: Clean, single-line patterns (no embedded newlines)
-OTP_TERMS = re.compile(r"\b(otp|pin|password)\b", re.I)
-PAY_TERMS = re.compile(r"\b(upi|pay|payment|transfer|send money|fee|charges)\b", re.I)
-# Include generic URLs and common shorteners
-LINK_TERMS = re.compile(
-    r"(https?://\S+|www\.\S+|bit\.ly/\S+|tinyurl\.com/\S+|t\.co/\S+)",
-    re.I,
-)
-KYC_TERMS = re.compile(r"\b(kyc|verify|verification|login|update)\b", re.I)
-THREAT_TERMS = re.compile(
-    r"\b(block|blocked|suspend|suspended|freeze|locked|fine|penalty)\b",
-    re.I,
-)
-IMPERSONATION_TERMS = re.compile(
-    r"\b("
-    r"bank|sbi|hdfc|icici|rbi|"
-    r"customer care|support team|kyc team|fraud team"
-    r")\b",
-    re.I,
-)
-
-
-def _high_signal_flags(text: str) -> Tuple[bool, List[str], str]:
-    """
-    Returns:
-    - high_signal: bool
-    - reasons: list[str] (<=6)
-    - scam_type_hint: str
-    """
-    t = text or ""
-    reasons: List[str] = []
-    scam_type_hint = "UNKNOWN"
-    high = False
-
-    if OTP_TERMS.search(t):
-        high = True
-        reasons.append("otp/pin/password request")
-        scam_type_hint = "BANK_IMPERSONATION"
-
-    if PAY_TERMS.search(t):
-        high = True
-        reasons.append("payment/upi request")
-        if scam_type_hint == "UNKNOWN":
-            scam_type_hint = "UPI_FRAUD"
-
-    if LINK_TERMS.search(t) and KYC_TERMS.search(t):
-        high = True
-        reasons.append("link + verify/kyc/login")
-        scam_type_hint = "PHISHING"
-
-    if IMPERSONATION_TERMS.search(t) and (OTP_TERMS.search(t) or PAY_TERMS.search(t) or LINK_TERMS.search(t)):
-        high = True
-        reasons.append("impersonation + high-signal request")
-        scam_type_hint = "BANK_IMPERSONATION"
-
-    if THREAT_TERMS.search(t) and (OTP_TERMS.search(t) or PAY_TERMS.search(t) or LINK_TERMS.search(t)):
-        high = True
-        reasons.append("threat + high-signal request")
-        if scam_type_hint == "UNKNOWN":
-            scam_type_hint = "BANK_IMPERSONATION"
-
-    return high, reasons[:6], scam_type_hint
-
-
 def _keyword_fallback(text: str) -> dict:
     """
     Conservative fallback:
     - Only classify scam when high-signal indicators exist.
     - Confidence >= threshold so true high-signal scams can still pass SCAM_THRESHOLD=0.75.
     """
-    high, reasons, scam_type_hint = _high_signal_flags(text)
-
-    scam = bool(high)
-    conf = 0.80 if scam else 0.25  # ensures scam fallback can pass threshold=0.75
-
+    # Use the shared deterministic scorer for fallback robustness.
+    s, rs, th = score_message(text or "")
+    scam = bool(s >= 0.75)  # strict fallback: require strong evidence in one message
+    conf = 0.82 if scam else 0.25
     return {
         "scamDetected": scam,
         "confidence": conf,
-        "scamType": (scam_type_hint if scam else "UNKNOWN"),
-        "reasons": reasons,
+        "scamType": (th if scam else "UNKNOWN"),
+        "reasons": rs[:4],
     }
 
 
@@ -134,15 +69,40 @@ def detect_scam(req, session) -> dict:
 
     latest_text = req.message.text or ""
 
-    user_prompt = (
-    "Classify the latest message.\n"
-    "Conversation context (most recent last):\n"
-    + "\n".join(hist_lines)
-    + "\n\n"
-    f"Latest message:\n{latest_text}\n"
-)
+    # -----------------------------
+    # Deterministic signal scoring (latest + cumulative)
+    # -----------------------------
+    try:
+        # Score a window of recent scammer messages (latest included if scammer)
+        recent_msgs: List[str] = []
+        for m in reversed(session.conversation or []):
+            if len(recent_msgs) >= int(getattr(settings, "DETECTOR_CUMULATIVE_WINDOW", 6) or 6):
+                break
+            if (m.get("sender") or "").lower() == "scammer":
+                recent_msgs.append(m.get("text") or "")
+        recent_msgs = list(reversed(recent_msgs))
+        agg = score_conversation(recent_msgs if recent_msgs else [latest_text])
+    except Exception:
+        agg = {
+            "cumulative_score": 0.0,
+            "max_score": 0.0,
+            "reasons": [],
+            "type_hint": "UNKNOWN",
+            "high_signal_seen": False,
+        }
 
-    high_signal, hs_reasons, hs_type = _high_signal_flags(latest_text)
+    user_prompt = (
+        "Classify the latest message.\n"
+        "Conversation context (most recent last):\n"
+        + "\n".join(hist_lines)
+        + "\n\n"
+        f"Latest message:\n{latest_text}\n"
+        "\n"
+        "Deterministic signal summary (for calibration, not hard rules):\n"
+        f"- cumulative_score: {agg.get('cumulative_score')}\n"
+        f"- max_score: {agg.get('max_score')}\n"
+        f"- high_signal_seen: {agg.get('high_signal_seen')}\n"
+    )
 
     try:
         out = chat_completion(system, user_prompt, temperature=0.0, max_tokens=180)
@@ -175,35 +135,28 @@ def detect_scam(req, session) -> dict:
             final_type = scam_type
             final_reasons = reasons
 
-            # Borderline confirmation pass only when high-signal exists
-            if high_signal and conf >= 0.55:
-                confirm_prompt = (
-    "STRICT CONFIRMATION:\n"
-    "Be conservative. Mark scamDetected=true only if there is a clear high-signal indicator.\n"
-    "Return JSON only.\n\n"
-    f"Latest message:\n{latest_text}\n"
-)
-                out2 = chat_completion(system, confirm_prompt, temperature=0.0, max_tokens=140)
-                data2 = _extract_json(out2)
-
-                scam2 = bool(data2.get("scamDetected", False))
-                try:
-                    conf2 = float(data2.get("confidence", 0.5))
-                except Exception:
-                    conf2 = 0.5
-                conf2 = max(0.0, min(1.0, conf2))
-
-                scam_type2 = str(data2.get("scamType") or hs_type or "UNKNOWN")
-                reasons2 = data2.get("reasons") or hs_reasons
-                if not isinstance(reasons2, list):
-                    reasons2 = [str(reasons2)]
-                reasons2 = [str(x) for x in reasons2][:6]
-
-                if scam2 and conf2 >= settings.SCAM_THRESHOLD:
+        # -----------------------------
+        # Cumulative override (generic, scenario-agnostic):
+        # If evidence accumulates across turns, avoid false negatives on slow-burn scams.
+        # -----------------------------
+        if getattr(settings, "DETECTOR_CUMULATIVE_MODE", True):
+            try:
+                cum = float(agg.get("cumulative_score", 0.0) or 0.0)
+                mx = float(agg.get("max_score", 0.0) or 0.0)
+                cum_thr = float(getattr(settings, "DETECTOR_CUMULATIVE_SCORE", 0.62) or 0.62)
+                mx_thr = float(getattr(settings, "DETECTOR_MAX_SCORE", 0.75) or 0.75)
+                # Trigger if either one strong message OR multiple moderate signals across turns
+                if (mx >= mx_thr) or (cum >= cum_thr and bool(agg.get("high_signal_seen"))):
                     final_scam = True
-                    final_conf = conf2
-                    final_type = scam_type2
-                    final_reasons = reasons2
+                    final_type = str(final_type or agg.get("type_hint") or "UNKNOWN")
+                    # Ensure confidence passes the global threshold while staying bounded
+                    final_conf = max(float(final_conf), max(settings.SCAM_THRESHOLD, 0.82))
+                    # Prefer deterministic reasons if LLM reasons are empty/weak
+                    det_rs = agg.get("reasons") or []
+                    if not final_reasons and det_rs:
+                        final_reasons = [str(x) for x in det_rs][:4]
+            except Exception:
+                pass
 
         return {
             "scamDetected": bool(final_scam),

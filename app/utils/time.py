@@ -34,13 +34,28 @@ def parse_timestamp_ms(ts) -> int:
         pass
     return now_ms()
 
-def compute_engagement_seconds(conversation: list[dict]) -> int:
+def compute_engagement_seconds(conversation: list[dict], first_seen_ms: int = 0, last_seen_ms: int = 0) -> int:
     """
     Compute engagement window from the first 'scammer' message timestamp
     to the last 'agent' message timestamp in the *persisted* session.conversation.
+    Prefer wall-clock (first_seen_ms -> last_seen_ms) when available for robust scoring.
     Falls back to last-any-message if no agent message exists yet.
     Returns whole seconds (int), clamped to >= 0.
     """
+    # 0) Prefer wall-clock if valid and increasing
+    try:
+        fs = int(first_seen_ms or 0)
+        ls = int(last_seen_ms or 0)
+        if fs > 0 and ls >= fs:
+            dur_ms = max(0, ls - fs)
+            sec = dur_ms // 1000
+            # Ensure >0 when an interaction existed but ms delta rounds down to 0
+            if sec == 0 and ls > fs:
+                sec = 1
+            return int(sec)
+    except Exception:
+        pass
+
     if not conversation:
         return 0
     # Defensive extraction
@@ -61,4 +76,8 @@ def compute_engagement_seconds(conversation: list[dict]) -> int:
         return 0
     end_ts = last_agent_ts or last_any_ts or scammer_ts
     duration_ms = max(0, end_ts - scammer_ts)
-    return duration_ms // 1000
+    sec = duration_ms // 1000
+    # If we have messages but timestamps collapse to same ms, ensure minimal non-zero engagement.
+    if sec == 0 and len(conversation) > 1:
+        sec = 1
+    return int(sec)

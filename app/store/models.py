@@ -25,6 +25,8 @@ class SessionState:
 
     # Conversation counters (canonical)
     turnIndex: int = 0  # ✅ always present
+    # ✅ NEW: Exchange-turn counter (counts agent replies, aligns with evaluator "turns")
+    turnsEngaged: int = 0
 
     # Keep for backward-compat / reporting, but derive from turnIndex when needed
     totalMessagesExchanged: int = 0
@@ -50,6 +52,13 @@ class SessionState:
 
     # Engagement metrics (for callback/reporting)
     engagementDurationSeconds: int = 0
+
+    # --- Engagement wall-clock tracking (robust vs timestamp quirks) ---
+    # Set on first observed request; updated on each request/reply cycle.
+    # Stored in epoch milliseconds to match other timestamps.
+    sessionFirstSeenAtMs: int = 0
+    sessionLastSeenAtMs: int = 0
+
     # Optional reporting fields (Response Structure bonus)
     confidenceLevel: float = 0.0
 
@@ -102,6 +111,13 @@ class SessionState:
     rephraseApplied: int = 0
     rephraseRejected: int = 0
     lastRephraseRejectReason: Optional[str] = None
+
+    # --- Conversation Quality tracker (rubric-aligned)
+    cqQuestionsAsked: int = 0
+    cqRelevantQuestions: int = 0
+    cqRedFlagMentions: int = 0
+    cqElicitationAttempts: int = 0
+
     def __post_init__(self):
         """
         Keep counters consistent:
@@ -118,3 +134,11 @@ class SessionState:
             self.turnIndex = len(self.conversation)
         # Sync the legacy field to canonical field
         self.totalMessagesExchanged = int(self.turnIndex)
+
+        # Backfill turnsEngaged for existing sessions (best-effort):
+        # Count agent messages in stored conversation as a proxy for "turns".
+        try:
+            if int(getattr(self, "turnsEngaged", 0) or 0) <= 0 and self.conversation:
+                self.turnsEngaged = sum(1 for m in (self.conversation or []) if (m.get("sender") or "").lower() == "agent")
+        except Exception:
+            pass

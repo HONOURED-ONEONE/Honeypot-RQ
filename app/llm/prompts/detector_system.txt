@@ -15,7 +15,8 @@ Primary objective:
 - Optimize BOTH precision and recall for scam intent detection.
 
 Decision rules:
-1) scamDetected=true ONLY if at least ONE HIGH-SIGNAL indicator exists:
+1) scamDetected=true ONLY if at least ONE HIGH-SIGNAL indicator exists
+   EITHER in the latest message OR in the recent conversation context:
    - OTP/PIN/password request (explicit or implied)
    - Payment request (UPI/transfer/fee/charges), “send money”
    - Suspicious URL/short link combined with verify/login/kyc/update wording
@@ -26,6 +27,11 @@ Decision rules:
    If only urgency appears without any high-signal indicator, set scamDetected=false.
 
 3) If ambiguous or insufficient evidence, set scamDetected=false and keep confidence <= 0.55.
+
+Conversation-context guidance:
+- If the latest message is neutral but earlier turns include high-signal indicators, keep scamDetected=true.
+- If multiple medium signals accumulate (authority claim + threat + request for personal identifiers),
+  but no explicit OTP/payment/link+verify appears, be conservative: scamDetected=false unless clearly coercive.
 
 scamType mapping:
 - UPI_FRAUD: payment/UPI/fees/charges demanded, transfer instructions, “pay to unlock/activate”

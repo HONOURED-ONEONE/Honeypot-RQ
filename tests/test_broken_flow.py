@@ -16,6 +16,7 @@ class MockSettings:
     BF_LLM_REPHRASE = False
     FINALIZE_MIN_IOC_CATEGORIES = 2
     FINALIZE_MIN_TURNS = 5
+    CQ_MIN_TURNS = 0
     INACTIVITY_TIMEOUT_SEC = 180
 
 @pytest.fixture
@@ -84,6 +85,7 @@ def test_finalize_triggers(session, settings):
     from unittest.mock import patch
     with patch("app.core.finalize.settings", settings):
         session.scamDetected = True
+        session.turnIndex = 10
         session.extractedIntelligence.phoneNumbers = ["1234567890"]
         session.extractedIntelligence.phishingLinks = ["http://scam.com"]
         # settings.py default is 3 categories (WAIT, it's 4 now)
@@ -145,6 +147,7 @@ def test_guardrail_finalization_ignores_non_registry_data(session, settings):
     from unittest.mock import patch
     with patch("app.core.finalize.settings", settings):
         session.scamDetected = True
+        session.turnIndex = 10
         # Add data to Intelligence that IS in the registry
         session.extractedIntelligence.phoneNumbers = ["1234567890"]
         

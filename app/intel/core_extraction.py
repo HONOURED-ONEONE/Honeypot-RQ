@@ -47,6 +47,10 @@ def normalize_text(s: str) -> str:
     s = s.translate(_digit_map)
     # unify weird hyphens/dots that scammers insert between digits/handles
     s = s.replace('·', '.').replace('•', '.').replace('．', '.').replace('–', '-').replace('—', '-')
+    # ✅ Conservative deobfuscation for common scams:
+    # Only replace bracketed (at)/(dot) forms to avoid breaking normal text.
+    s = re.sub(r"\s*(\(|\[)\s*at\s*(\)|\])\s*", " @", s, flags=re.I)
+    s = re.sub(r"\s*(\(|\[)\s*dot\s*(\)|\])\s*", ".", s, flags=re.I)
     # collapse spaces around typical separators to help regexes
     s = re.sub(r'\s+', ' ', s)
     return s
@@ -63,12 +67,25 @@ PHONE_RE = re.compile(
 )
 
 # Email: tolerant but case-insensitive; punycode/IDN not required for scoring, keep simple and fast.
+# Allow optional spaces around @ to support deobfuscated forms.
 EMAIL_RE = re.compile(
-    r'\b[a-z0-9._%+\-]+@[a-z0-9.\-]+\.[a-z]{2,}\b', re.I
+    r'\b[a-z0-9._%+\-]+\s*@\s*[a-z0-9.\-]+\.[a-z]{2,}\b', re.I
 )
 
-# URL: basic http(s) with conservative terminators; avoid trailing punctuation and unmatched brackets.
-URL_RE = re.compile(r"""\bhttps?://[^\s<>()\[\]{}"'\\^`]+""", re.I)
+# URL (expanded):
+# - http(s)://...
+# - www....
+# - common shorteners without scheme
+# - bare domains WITH / or ? (avoid plain domains without path/query)
+URL_RE = re.compile(
+    r"\b(?:"
+    r"https?://[^\s<>()\[\]{}\"'\\^`]+"
+    r"|www\.[^\s<>()\[\]{}\"'\\^`]+"
+    r"|(?:bit\.ly|t\.co|tinyurl\.com|is\.gd|goo\.gl|cutt\.ly|rb\.gy)/[A-Za-z0-9_\-/?=&%#.]+"
+    r"|(?:[a-z0-9-]+\.)+[a-z]{2,}(?:/[^\s<>()\[\]{}\"'\\^`]+|\?[^\s<>()\[\]{}\"'\\^`]+)"
+    r")",
+    re.I
+)
 
 # UPI: <handle> @<psp>. Allow dots/underscores/dashes in handle, lowercase PSP alpha.
 # Also catch spaced or dotted obfuscations we normalized (e.g., "id @ paytm").

@@ -16,6 +16,7 @@ from app.store.session_repo import load_session, save_session
 from app.core.broken_flow_controller import choose_next_action
 from app.llm.responder import generate_agent_reply
 from app.core.finalize import should_finalize
+from app.core.termination import decide_termination  # ✅ NEW unified termination policy
 from app.observability.logging import log
 
 from app.settings import settings
@@ -24,10 +25,11 @@ from app.intel.extractor import update_intelligence_from_text # ✅ P0.1: regist
 from app.core.guarded_config import begin_session_overlay, end_session_overlay # ✅ NEW (session-scoped config)
 from app.intel.artifact_registry import get_intent_instruction
 from app.core.red_flags import choose_red_flag
+from app.core.broken_flow_constants import INT_ASK_OFFICIAL_HELPLINE, INT_ASK_OFFICIAL_WEBSITE, INT_ASK_TICKET_REF, INT_ASK_DEPARTMENT_BRANCH, INT_ASK_ALT_VERIFICATION
 import re
 import hashlib
 from datetime import datetime
-from app.utils.time import parse_timestamp_ms, now_ms
+from app.utils.time import parse_timestamp_ms, now_ms, compute_engagement_seconds
 
 
 def _coerce_history_items(history: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -64,6 +66,11 @@ def handle_event(req):
             if boot:
                 session.conversation.extend(boot)
                 session.turnIndex = int(len(session.conversation))
+                # Backfill turnsEngaged from bootstrapped conversation history
+                try:
+                    session.turnsEngaged = sum(1 for m in session.conversation if (m.get("sender") or "").lower() == "agent")
+                except Exception:
+                    pass
     except Exception:
         # Non-influential safety net
         pass
@@ -73,6 +80,16 @@ def handle_event(req):
         incoming_ts = parse_timestamp_ms(getattr(req.message, "timestamp", None))
     except Exception:
         incoming_ts = now_ms()
+
+    # --- Engagement wall-clock tracking (request side) ---
+    try:
+        now_wall = now_ms()
+        if int(getattr(session, "sessionFirstSeenAtMs", 0) or 0) <= 0:
+            session.sessionFirstSeenAtMs = int(now_wall)
+        session.sessionLastSeenAtMs = int(now_wall)
+    except Exception:
+        pass
+
     try:
         session.conversation.append({
             "sender": getattr(req.message, "sender", "scammer"),
@@ -216,11 +233,22 @@ def handle_event(req):
         except Exception:
             esc = False
 
+        # Force a non-NONE red-flag cue only if we are below the rubric target and still building turns.
+        try:
+            force_flag = bool(
+                bool(getattr(session, "scamDetected", False))
+                and int(getattr(session, "cqRedFlagMentions", 0) or 0) < int(getattr(settings, "CQ_MIN_REDFLAGS", 5) or 5)
+                and int(getattr(session, "turnIndex", 0) or 0) < int(getattr(settings, "CQ_MIN_TURNS", 8) or 8)
+            )
+        except Exception:
+            force_flag = False
+
         rf = choose_red_flag(
             latest_text,
             getattr(session, "redFlagHistory", []) or [],
             escalation=bool(esc),
             recent_styles=getattr(session, "personaStyleHistory", []) or [],
+            force_flag=force_flag,
         )
         session.lastRedFlagTag = rf.tag
         hist = list(getattr(session, "redFlagHistory", []) or [])
@@ -250,12 +278,8 @@ def handle_event(req):
     bf_state = controller_out.get("bf_state")
     force_finalize = controller_out.get("force_finalize", False)
     target_key = controller_out.get("target_key")
-    # Prefer the controller's reason when it asserts finalize; only fallback otherwise
-    if force_finalize:
-        finalize_reason = controller_out.get("reason") or "controller_finalize"
-    else:
-        # should_finalize(...) may return None or a string
-        finalize_reason = should_finalize(session)
+    # ✅ Unified termination policy (controller + finalize in one place)
+    finalize_reason = decide_termination(session=session, controller_out=controller_out)
     
     # We might have been finalized by controller OR fallback
     finalized = finalize_reason is not None
@@ -368,31 +392,62 @@ def handle_event(req):
             "timestamp": reply_ts,
         })
         session.turnIndex = int(getattr(session, "turnIndex", 0) or 0) + 1
+        # ✅ Exchange-turn increment (one per agent reply)
+        session.turnsEngaged = int(getattr(session, "turnsEngaged", 0) or 0) + 1
+
+        # --- Engagement wall-clock tracking (reply side) ---
+        try:
+            now_wall2 = now_ms()
+            if int(getattr(session, "sessionFirstSeenAtMs", 0) or 0) <= 0:
+                session.sessionFirstSeenAtMs = int(now_wall2)
+            session.sessionLastSeenAtMs = int(now_wall2)
+        except Exception:
+            pass
+
         # Persist after reply so duration & intel accumulation grow across turns
         save_session(session)
     except Exception:
         # Non-influential; continue even if append fails
         pass
 
+    # -----------------------------------------------------------------------
+    # Conversation Quality tracker updates (rubric-aligned)
+    # -----------------------------------------------------------------------
+    try:
+        # Questions Asked: count "?" in agent reply (responder enforces 0/1 question).
+        if "?" in (reply_text or ""):
+            session.cqQuestionsAsked = int(getattr(session, "cqQuestionsAsked", 0) or 0) + 1
+
+        # Relevant Questions: count investigative intents (explicitly tied to verification artifacts).
+        investigative_intents = {
+            INT_ASK_OFFICIAL_HELPLINE,
+            INT_ASK_OFFICIAL_WEBSITE,
+            INT_ASK_TICKET_REF,
+            INT_ASK_DEPARTMENT_BRANCH,
+            INT_ASK_ALT_VERIFICATION,
+        }
+        if intent in investigative_intents and "?" in (reply_text or ""):
+            session.cqRelevantQuestions = int(getattr(session, "cqRelevantQuestions", 0) or 0) + 1
+
+        # Red Flag Identification: count whenever we emit a non-NONE tag cue.
+        if getattr(session, "lastRedFlagTag", None) and str(session.lastRedFlagTag) != "NONE":
+            session.cqRedFlagMentions = int(getattr(session, "cqRedFlagMentions", 0) or 0) + 1
+
+        # Information Elicitation: treat each investigative intent as an elicitation attempt (1 per turn).
+        if intent in investigative_intents:
+            session.cqElicitationAttempts = int(getattr(session, "cqElicitationAttempts", 0) or 0) + 1
+
+        save_session(session)
+    except Exception:
+        pass
+
     # --- Update engagement metrics on session for callback ---
     try:
-        # first scammer timestamp
-        first_ts = None
-        for m in session.conversation:
-            if (m.get("sender") == "scammer") and m.get("timestamp"):
-                first_ts = m["timestamp"]
-                break
-        # last agent reply timestamp
-        last_ts = None
-        for m in reversed(session.conversation):
-            if (m.get("sender") == "agent") and m.get("timestamp"):
-                last_ts = m["timestamp"]
-                break
-        if isinstance(first_ts, (int, float)) and isinstance(last_ts, (int, float)) and last_ts >= first_ts:
-            session.engagementDurationSeconds = int((last_ts - first_ts) / 1000)
-        else:
-            # best-effort fallback: zero
-            session.engagementDurationSeconds = int(getattr(session, "engagementDurationSeconds", 0) or 0)
+        session.engagementDurationSeconds = compute_engagement_seconds(
+            session.conversation or [],
+            first_seen_ms=int(getattr(session, "sessionFirstSeenAtMs", 0) or 0),
+            last_seen_ms=int(getattr(session, "sessionLastSeenAtMs", 0) or 0),
+        )
     except Exception:
         # retain existing value if any
         pass
@@ -421,7 +476,7 @@ def handle_event(req):
         try:
             # Pass through the controller's reason so evaluator sees the specific gate
             enqueue_guvi_final_result(session, finalize_reason=finalize_reason)
-            session.callbackStatus = "queued"
+            # callbackStatus is now set by hybrid dispatcher (sent/queued/failed)
         except Exception:
             session.callbackStatus = "failed"
         # Persist session (kept as-is)

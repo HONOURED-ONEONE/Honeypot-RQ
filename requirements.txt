@@ -1,9 +1,14 @@
 fastapi>=0.110
-uvicorn[standard]>=0.27
-pydantic>=2.5
-redis>=5.0
-rq>=2.6
-httpx>=0.25
+uvicorn>=0.27
+pydantic>=2.6
 python-dotenv>=1.0
-requests>=2.31.0
-starlette
+httpx>=0.26
+starlette>=0.36
+redis>=5.0
+rq>=1.15
+
+# Optional (if you run structured logs locally)
+# orjson>=3.9
+
+# Dev/test (optional)
+pytest>=8.0

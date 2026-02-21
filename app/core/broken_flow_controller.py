@@ -304,6 +304,43 @@ def choose_next_action(
     recent = session.bf_recent_intents[-_RECENT_WINDOW:]
 
     # ------------------------------------------------------------
+    # Rubric catch-up rail (Conversation Quality) [1]
+    # If we are approaching CQ_MIN_TURNS, prioritize intents that increase:
+    # - Questions (already 1 per turn), but ensure they are INVESTIGATIVE (relevant)
+    # - Red-flag cues (handled in orchestrator via force_flag)
+    # - Elicitation attempts (investigative intents)
+    # ------------------------------------------------------------
+    try:
+        cq_turns_target = int(getattr(settings, "CQ_MIN_TURNS", 8) or 8)
+        cq_rel_target = int(getattr(settings, "CQ_MIN_RELEVANT_QUESTIONS", 3) or 3)
+        cq_elic_max = int(getattr(settings, "CQ_MAX_ELICITATION_ATTEMPTS", 5) or 5)
+        turns = int(getattr(session, "turnIndex", 0) or 0)
+        rel = int(getattr(session, "cqRelevantQuestions", 0) or 0)
+        elic = int(getattr(session, "cqElicitationAttempts", 0) or 0)
+
+        # If we are within the last 3 turns before target and still short on relevant/elicitation,
+        # force an investigative intent that is clearly countable.
+        if turns >= max(0, cq_turns_target - 3):
+            if rel < cq_rel_target or elic < cq_elic_max:
+                # Choose one that is missing in intel to remain productive and non-repetitive.
+                intent, target_key = _pick_missing_intel_target(intel_dict, session.bf_recent_intents, session.scam_type)
+                # If picker returned ACK, upgrade to a safe investigative default.
+                if intent == INT_ACK_CONCERN:
+                    intent, target_key = INT_ASK_TICKET_REF, None
+                return {
+                    "bf_state": session.bf_state,
+                    "intent": intent,
+                    "responder_key": intent,
+                    "reason": "cq_catchup_investigative",
+                    "force_finalize": False,
+                    "scam_type": session.scam_type,
+                    "instruction": _instruction_for(intent, target_key),
+                    "target_key": target_key,
+                }
+    except Exception:
+        pass
+
+    # ------------------------------------------------------------
     # PIVOT 0: Early boundary refusal if OTP/PIN appears and we haven't refused once.
     # This improves realism and safety without revealing detection logic.
     # ------------------------------------------------------------
@@ -547,17 +584,18 @@ def choose_next_action(
         try:
             ioc_cnt = _ioc_category_count_from_dict(intel_dict)
             scam_ok = bool(getattr(session, "scamDetected", False))
-            turns  = int(getattr(session, "turnIndex", 0) or 0)
+            # Use exchange-turn count for "turn" gates (aligns with evaluator "up to 10 turns") [2](https://kcetvnrorg-my.sharepoint.com/personal/24ucs160_kamarajengg_edu_in/Documents/Microsoft%20Copilot%20Chat%20Files/Honeypot%20API%20Evaluation%20System%20Documentation%20Updated%20-%20feb%2019.pdf)
+            turns = int(getattr(session, "turnsEngaged", 0) or 0)
             # New gating: prefer closing only after expected IOC coverage AND min turns,
             # while still allowing deterministic termination (no-progress/repeat/max-turns elsewhere).
             if scam_ok:
                 exp_cov = _expected_iocs_covered(intel_dict, session.scam_type)
-                if exp_cov and turns >= 8:
+                if exp_cov and turns >= int(getattr(settings, "CQ_MIN_TURNS", 8) or 8):
                     intent = INT_CLOSE_AND_VERIFY_SELF
                     target_key = None
                     force_finalize = True
                     reason = CTRL_REASON_EXPECTED_IOCS
-                elif ioc_cnt >= settings.FINALIZE_MIN_IOC_CATEGORIES and turns >= 8:
+                elif ioc_cnt >= settings.FINALIZE_MIN_IOC_CATEGORIES and turns >= int(getattr(settings, "CQ_MIN_TURNS", 8) or 8):
                     intent = INT_CLOSE_AND_VERIFY_SELF
                     target_key = None
                     force_finalize = True

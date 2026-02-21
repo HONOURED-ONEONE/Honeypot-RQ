@@ -4,6 +4,7 @@ import json
 from app.settings import settings
 from app.store.session_repo import load_session, save_session
 from app.callback.payloads import build_final_payload, validate_final_payload
+from app.callback.contract import sanitize_final_payload, validate_contract
 from app.observability.logging import log
 from app.store.redis_conn import get_redis
 
@@ -14,17 +15,28 @@ def send_final_result(session_id: str):
 
     session = load_session(session_id)
     payload = build_final_payload(session)
-    ok, reason = validate_final_payload(payload)
+
+    # Always sanitize to prevent contract drift impacting scoring.
+    payload = sanitize_final_payload(payload)
+
+    # Validate contract; if invalid, DO NOT abort—re-sanitize and proceed with best-effort payload.
+    ok, reason = validate_contract(payload)
     if not ok:
         try:
-            log(event="callback_payload_invalid", sessionId=session_id, reason=reason, payloadPreview=payload)
+            log(event="callback_payload_invalid_autofix",
+                sessionId=session_id, reason=reason, payloadPreview=payload)
         except Exception:
             pass
-        raise RuntimeError(f"Invalid callback payload: {reason}")
+        payload = sanitize_final_payload(payload)
 
     # Send callback (executed in worker)
     start = time.time()
     try:
+        fp = "na"
+        try:
+            fp = str((payload.get("extractedIntelligence") or {}).get("_meta", {}).get("payloadFingerprint", "na"))
+        except Exception:
+            fp = "na"
         log(
             event="callback_send_attempt",
             sessionId=session_id,
@@ -32,7 +44,7 @@ def send_final_result(session_id: str):
             timeoutSec=int(getattr(settings, "CALLBACK_TIMEOUT_SEC", 5) or 5),
             scamDetected=bool(getattr(session, "scamDetected", False)),
             totalMessagesExchanged=int(getattr(session, "totalMessagesExchanged", 0) or 0),
-            payloadFingerprint=str(payload.get("payloadFingerprint","na")),
+            payloadFingerprint=fp,
         )
         log(event="callback_payload_preview", sessionId=session_id, payload=payload)
     except Exception:

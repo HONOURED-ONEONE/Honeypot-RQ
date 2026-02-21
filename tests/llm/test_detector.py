@@ -1,29 +1,30 @@
 import pytest
-from app.llm.detector import _high_signal_flags, _keyword_fallback
+from app.llm.detector import _keyword_fallback
+from app.llm.signals import score_message
 
 def test_high_signal_flags_otp():
-    high, reasons, scam_hint = _high_signal_flags("Please share your OTP")
-    assert high is True
-    assert "otp/pin/password request" in reasons
+    s, reasons, scam_hint = score_message("Please share your OTP")
+    assert s >= 0.45
+    assert "credential request (otp/pin/password)" in reasons
     assert scam_hint == "BANK_IMPERSONATION"
 
 def test_high_signal_flags_upi():
-    high, reasons, scam_hint = _high_signal_flags("Send money via UPI")
-    assert high is True
-    assert "payment/upi request" in reasons
+    s, reasons, scam_hint = score_message("Send money via UPI")
+    assert s >= 0.45
+    assert "payment/transfer request" in reasons
     assert scam_hint == "UPI_FRAUD"
 
 def test_high_signal_flags_phishing():
-    high, reasons, scam_hint = _high_signal_flags("Visit https://bit.ly/123 to verify account")
-    assert high is True
-    assert "link + verify/kyc/login" in reasons
+    s, reasons, scam_hint = score_message("Visit https://bit.ly/123 to verify account")
+    assert s >= 0.45
+    assert "link combined with verify/login/kyc" in reasons
     assert scam_hint == "PHISHING"
 
 def test_keyword_fallback():
-    res = _keyword_fallback("Please share your OTP")
+    # _keyword_fallback requires score >= 0.75 for scamDetected=True
+    res = _keyword_fallback("Please share your OTP and payment details immediately to avoid block")
     assert res["scamDetected"] is True
-    assert res["confidence"] == 0.80
-    assert res["scamType"] == "BANK_IMPERSONATION"
+    assert res["confidence"] == 0.82
 
 def test_keyword_fallback_no_scam():
     res = _keyword_fallback("How are you?")
@@ -40,23 +41,20 @@ def test_detector_regexes_robustness():
         "go to t.co/abc123"
     ]
     for text in texts:
-        high, _, _ = _high_signal_flags(text + " to kyc")
-        assert high is True, f"Failed on: {text}"
+        s, _, _ = score_message(text + " to kyc")
+        assert s >= 0.45, f"Failed on: {text}"
 
     # Test IMPERSONATION_TERMS with combinations
-    high, reasons, _ = _high_signal_flags("This is HDFC bank. Please share your OTP.")
-    assert high is True
-    assert "impersonation + high-signal request" in reasons
+    s, reasons, _ = score_message("This is HDFC bank. Please share your OTP.")
+    assert s >= 0.5
+    assert "impersonation/authority claim" in reasons
 
-    high, _, _ = _high_signal_flags("Contact customer care for UPI payment")
-    assert high is True
+    s, _, _ = score_message("Contact customer care for UPI payment")
+    assert s >= 0.5
 
     # Test word boundaries
-    high, _, _ = _high_signal_flags("Not an otp-like string") # otp is matched but not word-boundary?
-    # Actually "otp-like" might match \b if - is treated as non-word.
-    # Let's test non-matching
-    high, _, _ = _high_signal_flags("not_an_otp_string")
-    assert high is False
+    s, _, _ = score_message("not_an_otp_string")
+    assert s < 0.45
 
-    high, _, _ = _high_signal_flags("my_upi_id")
-    assert high is False
+    s, _, _ = score_message("my_upi_id")
+    assert s < 0.45

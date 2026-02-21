@@ -14,6 +14,13 @@ from app.store.redis_conn import get_redis
 
 router = APIRouter()
 
+COMPAT_POST_PATHS = (
+    "/api/honeypot",     # primary
+    "/honeypot",         # common alias
+    "/detect",           # evaluator example path style
+    "/api/detect",       # extra safety
+)
+
 
 async def _handle_honeypot(request: Request, payload: Any) -> HoneypotResponse:
     """Accept ANY payload (or no payload) and normalize into HoneypotRequest."""
@@ -49,16 +56,40 @@ async def _handle_honeypot(request: Request, payload: Any) -> HoneypotResponse:
     return HoneypotResponse(status="success", reply=reply_val)
 
 
+def _ping_reply() -> HoneypotResponse:
+    # Safe “ping” response for GET requests; does not start a session.
+    # The evaluator submission expects a publicly accessible endpoint and a stable JSON response.
+    return HoneypotResponse(
+        status="success",
+        reply="Honeypot API is running. Send a POST request with {sessionId, message, conversationHistory, metadata}."
+    )
 
-# ✅ Main endpoint (what the spec expects)
-@router.api_route(
-    "/api/honeypot",
-    methods=["POST", "GET"],
-    response_model=HoneypotResponse,
-    dependencies=[Depends(require_api_key)],
-)
-async def honeypot_api(request: Request, payload: Any = Body(None)):
-    return await _handle_honeypot(request, payload)
+
+# ---------------------------------------------------------------------------
+# POST endpoints: accept compatible paths (submission/tooling variance)
+# ---------------------------------------------------------------------------
+for _path in COMPAT_POST_PATHS:
+    @router.post(
+        _path,
+        response_model=HoneypotResponse,
+        dependencies=[Depends(require_api_key)],
+    )
+    async def honeypot_post(request: Request, payload: Any = Body(None)):  # type: ignore
+        return await _handle_honeypot(request, payload)
+
+
+# ---------------------------------------------------------------------------
+# GET endpoints: respond with a stable payload (no session creation)
+# ---------------------------------------------------------------------------
+for _path in COMPAT_POST_PATHS:
+    @router.get(
+        _path,
+        response_model=HoneypotResponse,
+        dependencies=[Depends(require_api_key)],
+    )
+    async def honeypot_get():  # type: ignore
+        return _ping_reply()
+
 
 # ✅ Root alias (some endpoint testers keep calling only /)
 @router.api_route(
@@ -67,9 +98,13 @@ async def honeypot_api(request: Request, payload: Any = Body(None)):
     response_model=HoneypotResponse,
     dependencies=[Depends(require_api_key)],
 )
-
 async def honeypot_root(request: Request, payload: Any = Body(None)):
     return await _handle_honeypot(request, payload)
+
+
+@router.get("/ping", response_model=HoneypotResponse, dependencies=[Depends(require_api_key)])
+async def ping():
+    return _ping_reply()
 
 
 @router.get("/debug/feature-flags")

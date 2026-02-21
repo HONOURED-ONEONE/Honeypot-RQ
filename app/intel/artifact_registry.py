@@ -50,9 +50,21 @@ _ORDER_NO_RE = re.compile(
 
 # Regexes from existing extractor.py
 UPI_RE = re.compile(r"\b[a-zA-Z0-9.\-_]{2,64}@[a-zA-Z]{2,32}\b")
-# ✅ Robust single-pattern URL extractor (http(s)://… or www.…)
-# Correct alternation: http(s)://... OR www....
-URL_RE = re.compile(r"\b(?:https?://\S+|www\.\S+)", re.IGNORECASE)
+# ✅ URL extractor (expanded):
+# - http(s)://...
+# - www....
+# - common shorteners without scheme: bit.ly/..., t.co/..., tinyurl.com/..., is.gd/...
+# - bare domains WITH a path or query: example.com/path, example.com?x=1
+#   (avoid matching plain domains without / or ? to reduce false positives)
+URL_RE = re.compile(
+    r"\b(?:"
+    r"https?://[^\s<>()\[\]{}\"'\\^`]+"
+    r"|www\.[^\s<>()\[\]{}\"'\\^`]+"
+    r"|(?:bit\.ly|t\.co|tinyurl\.com|is\.gd|goo\.gl|cutt\.ly|rb\.gy)/[A-Za-z0-9_\-/?=&%#.]+"
+    r"|(?:[a-z0-9-]+\.)+[a-z]{2,}(?:/[^\s<>()\[\]{}\"'\\^`]+|\?[^\s<>()\[\]{}\"'\\^`]+)"
+    r")",
+    re.IGNORECASE
+)
 _PHONE_PATTERNS = [
     # Mobile (optionally +91), guarded so it cannot be carved out of adjacent digits
     re.compile(r"(?<!\d)(?:\+91[-\s]?)?[6-9]\d{9}(?!\d)"),
@@ -61,7 +73,13 @@ _PHONE_PATTERNS = [
     # Toll-free 1800 contiguous digits (older style)
     re.compile(r"(?<!\d)1800\d{6,7}(?!\d)"),
 ]
+
+# ✅ International / E.164-ish phone capture (conservative):
+# - requires '+' OR parentheses/space separators
+# - total digits 10..15 to avoid matching short numeric IDs
+_PHONE_INTL_RE = re.compile(r"(?<!\d)(?:\+?\d[\d\-\s().]{8,}\d)(?!\d)")
 _ACCT_PATTERN = re.compile(r"\b(?:\d[ -]?){12,19}\b")
+
 
 # Normalization utilities
 def normalize_phone(s: str) -> str:
@@ -71,15 +89,33 @@ def normalize_phone(s: str) -> str:
         return f"{clean[:4]}-{clean[4:7]}-{clean[7:]}"
     return clean
 
+
+def _digits_only(s: str) -> str:
+    return re.sub(r"\D", "", s or "")
+
+
+def _valid_intl_phone(raw: str) -> bool:
+    d = _digits_only(raw)
+    # Avoid confusing long IDs with phones; require 10..15 digits
+    return 10 <= len(d) <= 15
+
 def normalize_upi(s: str) -> str:
     return s.lower()
 
 def normalize_url(u: str) -> str:
     # Strip common trailing punctuation that frequently rides with URLs
     u = (u or "").strip().rstrip(').,;!?\'"[]{}')
-    # Promote www.* to https://www.*
-    if u.lower().startswith('www.'):
-        u = 'https://' + u
+    # Promote scheme-less forms:
+    # - www.* -> https://www.*
+    # - shorteners like bit.ly/... -> https://bit.ly/...
+    # - bare domains with / or ? -> https://example.com/...
+    ul = u.lower()
+    if ul.startswith("www."):
+        u = "https://" + u
+    elif re.match(r"^(?:bit\.ly|t\.co|tinyurl\.com|is\.gd|goo\.gl|cutt\.ly|rb\.gy)/", ul):
+        u = "https://" + u
+    elif re.match(r"^(?:[a-z0-9-]+\.)+[a-z]{2,}(?:/|\?)", ul):
+        u = "https://" + u
     return u
 
 def _valid_http_url(u: str) -> bool:
@@ -445,6 +481,13 @@ def _extract_phones(text: str) -> List[str]:
     found = []
     for pat in _PHONE_PATTERNS:
         found.extend(pat.findall(text))
+    # Add international matches; filter to plausible lengths
+    try:
+        for m in _PHONE_INTL_RE.findall(text or ""):
+            if _valid_intl_phone(m):
+                found.append(m)
+    except Exception:
+        pass
     return found
 
 # Register core artifacts

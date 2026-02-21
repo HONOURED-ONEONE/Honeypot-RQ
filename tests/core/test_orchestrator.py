@@ -8,7 +8,7 @@ from app.store.models import SessionState, Intelligence
 def mock_req():
     return HoneypotRequest(
         sessionId="test_session",
-        message=Message(sender="scammer", text="hello +919876543210", timestamp=123456),
+        message=Message(sender="scammer", text="hello +919876543210", timestamp=1234567890123),
         conversationHistory=[]
     )
 
@@ -91,7 +91,7 @@ def test_handle_event_persistence_and_counters(
     assert len(session.conversation) == 2
     assert session.conversation[0]["sender"] == "scammer"
     assert session.conversation[0]["text"] == "hello +919876543210"
-    assert session.conversation[0]["timestamp"] == 123456
+    assert session.conversation[0]["timestamp"] == 1234567890123
     assert session.conversation[1]["sender"] == "agent"
     assert session.conversation[1]["text"] == "Agent reply here"
     assert isinstance(session.conversation[1]["timestamp"], int)
@@ -139,13 +139,13 @@ def test_coerce_history_items():
     
     # Valid history
     history = [
-        {"sender": "scammer", "text": "hello", "timestamp": 1000},
-        {"sender": "user", "text": "hi", "timestamp": 2000}
+        {"sender": "scammer", "text": "hello", "timestamp": 1234567890123},
+        {"sender": "user", "text": "hi", "timestamp": 1234567890124}
     ]
     coerced = _coerce_history_items(history)
     assert len(coerced) == 2
     assert coerced[0]["sender"] == "scammer"
-    assert coerced[0]["timestamp"] == 1000
+    assert coerced[0]["timestamp"] == 1234567890123
     
     # Missing fields
     history_incomplete = [
