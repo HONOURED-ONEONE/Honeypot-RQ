@@ -468,6 +468,17 @@ def handle_event(req):
     # Only when scamDetected is true and finalization condition is met
     # Ensure it triggers exactly once.
     if (force_finalize or finalize_reason) and session.scamDetected and session.callbackStatus in ("none", "failed"):
+        try:
+            log(
+                event="finalize_snapshot",
+                sessionId=session.sessionId,
+                firstSeenMs=int(getattr(session, "sessionFirstSeenAtMs", 0) or 0),
+                lastSeenMs=int(getattr(session, "sessionLastSeenAtMs", 0) or 0),
+                durationSec=int(getattr(session, "engagementDurationSeconds", 0) or 0),
+                turnsEngaged=int(getattr(session, "turnsEngaged", 0) or 0),
+            )
+        except Exception:
+            pass
         # Keep counters synced for callback payload
         session.totalMessagesExchanged = int(getattr(session, "turnIndex", 0) or 0)
 

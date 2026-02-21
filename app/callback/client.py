@@ -73,7 +73,7 @@ def send_final_result(session_id: str):
                     sessionId=session_id,
                     statusCode=int(resp.status_code),
                     elapsedMs=int(elapsed_ms),
-                    payloadFingerprint=str(payload.get("payloadFingerprint","na")),
+                    payloadFingerprint=str((payload.get("extractedIntelligence") or {}).get("_meta", {}).get("payloadFingerprint", "na")),
                 )
             except Exception:
                 pass
@@ -88,7 +88,7 @@ def send_final_result(session_id: str):
                 sessionId=session_id,
                 statusCode=int(resp.status_code),
                 elapsedMs=int(elapsed_ms),
-                payloadFingerprint=str(payload.get("payloadFingerprint","na")),
+                payloadFingerprint=str((payload.get("extractedIntelligence") or {}).get("_meta", {}).get("payloadFingerprint", "na")),
                 responseText=(resp.text or "")[:500],
             )
         except Exception:
@@ -110,7 +110,7 @@ def send_final_result(session_id: str):
                 elapsedMs=int(elapsed_ms),
                 errorType=type(e).__name__,
                 error=str(e)[:500],
-                payloadFingerprint=str(payload.get("payloadFingerprint","na")),
+                payloadFingerprint=str((payload.get("extractedIntelligence") or {}).get("_meta", {}).get("payloadFingerprint", "na")),
             )
         except Exception:
             pass

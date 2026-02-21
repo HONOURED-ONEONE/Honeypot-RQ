@@ -1,6 +1,7 @@
 import re
 import time
 import json
+from typing import Match
 from dataclasses import dataclass, field
 from typing import Callable, List, Optional, Dict, Any, Iterable, Set, Tuple
 from app.settings import settings
@@ -79,6 +80,13 @@ _PHONE_PATTERNS = [
 # - total digits 10..15 to avoid matching short numeric IDs
 _PHONE_INTL_RE = re.compile(r"(?<!\d)(?:\+?\d[\d\-\s().]{8,}\d)(?!\d)")
 _ACCT_PATTERN = re.compile(r"\b(?:\d[ -]?){12,19}\b")
+
+# Email extractor (tolerant). Keep simple + fast.
+EMAIL_RE = re.compile(r"\b[a-z0-9._%+\-]+\s*@\s*[a-z0-9.\-]+\.[a-z]{2,}\b", re.I)
+
+def normalize_email(e: str) -> str:
+    # remove spaces around @ and lowercase
+    return re.sub(r"\s+", "", (e or "")).lower()
 
 
 # Normalization utilities
@@ -519,6 +527,13 @@ artifact_registry.register(ArtifactSpec(
     normalize_fn=normalize_bank,
     priority=5,
     conflicts_with=["phoneNumbers"]
+))
+
+artifact_registry.register(ArtifactSpec(
+    key="emailAddresses",
+    extract_fn=lambda t: EMAIL_RE.findall(t or ""),
+    normalize_fn=normalize_email,
+    priority=9
 ))
 
 # ✅ NEW: Case IDs / Policy Numbers / Order Numbers

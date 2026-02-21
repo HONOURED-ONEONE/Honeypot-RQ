@@ -1,5 +1,6 @@
 from app.intel.artifact_registry import artifact_registry, normalize_url
 from app.intel.keywords import extract_keywords  # ✅ P0.2: keyword signals
+from app.observability.logging import log
 #
 # ✅ Tier-1 deterministic extraction (Regex-hardened)
 #    Integrate core_extraction.extract_all() without breaking Registry invariants.
@@ -78,6 +79,16 @@ def update_intelligence_from_text(session, text: str):
                 _dedupe_extend_map(dyn, key, values)
             except Exception:
                 pass
+
+    # Observability: log new ID-like artifacts (helps validate planted fields)
+    try:
+        if reg_results.get("caseIds") or reg_results.get("policyNumbers") or reg_results.get("orderNumbers"):
+            log(event="id_artifacts_extracted", sessionId=session.sessionId,
+                caseIds=reg_results.get("caseIds", []),
+                policyNumbers=reg_results.get("policyNumbers", []),
+                orderNumbers=reg_results.get("orderNumbers", []))
+    except Exception:
+        pass
 
     # --- 2) Tier-1 deterministic extraction (core_extraction)
     # Merge in hardened regex results (phones, urls, upi, bank, emails).
