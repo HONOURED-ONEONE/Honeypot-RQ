@@ -90,6 +90,10 @@ class Settings:
     CALLBACK_MAX_DELAY_MS: int = int(os.getenv("CALLBACK_MAX_DELAY_MS", "3600000"))
     CALLBACK_DLQ_TTL_DAYS: int = int(os.getenv("CALLBACK_DLQ_TTL_DAYS", "7"))
 
+    # Feature Flags (Startup & Component Guards)
+    ENABLE_OUTBOX: bool = os.getenv("ENABLE_OUTBOX", "true").lower() == "true"
+    ENABLE_GUVI_CALLBACK: bool = os.getenv("ENABLE_GUVI_CALLBACK", "true").lower() == "true"
+
     # Objective 5: Enhanced Intelligence Extraction
     EXTRACTION_ID_ENABLED: bool = os.getenv("EXTRACTION_ID_ENABLED", "true").lower() == "true"
     NO_NEW_IOC_TURNS: int = int(os.getenv("NO_NEW_IOC_TURNS", "2"))

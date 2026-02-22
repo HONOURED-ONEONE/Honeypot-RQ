@@ -1,19 +1,16 @@
 # app/core/guvi_callback.py
 from typing import Optional
-from app.queue.rq_conn import get_queue
-from app.queue.jobs import send_final_callback_job
 from app.observability.logging import log
 from app.settings import settings
-from app.callback.sender import send_final_result_sync
 
 def enqueue_guvi_final_result(session, finalize_reason: Optional[str] = None) -> None:
     """
-    Enqueue the new Group‑D callback path:
-      app.queue.jobs.send_final_callback_job(sessionId)
-    The worker will run app/callback/client.py::send_final_result(sessionId),
-    which builds the versioned payload, validates it, logs callback_payload_preview,
-    and posts to the evaluator.
+    Enqueue the new Group‑D callback path.
+    Uses lazy imports to avoid circular dependencies with orchestrator/jobs.
     """
+    if not settings.ENABLE_GUVI_CALLBACK:
+        return
+
     # Persist finalize_reason into agentNotes (append; avoid duplicates)
     try:
         if finalize_reason:
@@ -37,7 +34,12 @@ def enqueue_guvi_final_result(session, finalize_reason: Optional[str] = None) ->
     except Exception:
         pass
 
-    # Hybrid/sync mode: try immediate send first (deadline-bounded to fit 10s wait) [1](https://kcetvnrorg-my.sharepoint.com/personal/24ucs160_kamarajengg_edu_in/Documents/Microsoft%20Copilot%20Chat%20Files/Honeypot%20API%20Evaluation%20System%20Documentation%20Updated%20-%20feb%2019.pdf)
+    # Lazy imports to break cycle: orchestrator -> guvi_callback -> jobs -> client -> outbox
+    from app.callback.sender import send_final_result_sync
+    from app.queue.jobs import send_final_callback_job
+    from app.queue.rq_conn import get_queue
+
+    # Hybrid/sync mode: try immediate send first (deadline-bounded to fit 10s wait)
     if mode in ("sync", "hybrid"):
         try:
             ok = send_final_result_sync(
@@ -52,7 +54,6 @@ def enqueue_guvi_final_result(session, finalize_reason: Optional[str] = None) ->
                     pass
                 return
         except Exception:
-            # If sync path errors unexpectedly, we still may queue in hybrid mode
             pass
 
     # RQ mode or hybrid fallback: enqueue
