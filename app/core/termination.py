@@ -12,39 +12,6 @@ Evaluator notes:
 from __future__ import annotations
 
 from typing import Any, Dict, Optional
-
-from app.settings import settings
-from app.intel.artifact_registry import artifact_registry
-
-
-def _ioc_category_count(session) -> int:
-    """
-    Counts distinct artifact categories populated in the registry.
-    INVARIANT: Only registry-defined keys are valid for completion logic.
-    """
-    intel = session.extractedIntelligence
-    count = 0
-    # Use registry to determine which keys to check
-    for key in artifact_registry.artifacts.keys():
-        # 1) static fields on Intelligence
-        if hasattr(intel, key):
-            vals = getattr(intel, key)
-            if isinstance(vals, list) and len(vals) > 0:
-                count += 1
-                continue
-        # 2) dynamic add-ons bucket
-        try:
-            dyn = getattr(intel, "dynamicArtifacts", None)
-            if isinstance(dyn, dict):
-                vals2 = dyn.get(key)
-                if isinstance(vals2, list) and len(vals2) > 0:
-                    count += 1
-        except Exception:
-            pass
-    return count
-
-
-from typing import Any, Dict, Optional
 import time
 
 from app.settings import settings

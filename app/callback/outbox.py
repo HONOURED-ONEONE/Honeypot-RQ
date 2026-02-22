@@ -8,6 +8,7 @@ import app.store.session_repo as session_repo
 from app.observability.logging import log
 from app.store.redis_conn import get_redis
 import app.callback.client as callback_client
+import app.observability.metrics as metrics
 
 def _now_ms() -> int:
     return int(time.time() * 1000)
@@ -81,12 +82,14 @@ def process_outbox_entry(session_id: str) -> bool:
     
     headers = {
         "Idempotency-Key": str(session.reportId),
-        "X-Report-Version": str(getattr(session, "contractVersion", "1.1") or "1.1"),
+        "X-Report-Version": str(getattr(settings, "CALLBACK_PAYLOAD_VERSION", "1.1")),
         "Content-Type": "application/json"
     }
 
     start_ts = _now_ms()
     
+    metrics.increment_callback_attempt()
+
     # Use Isolated Delivery Client
     success, status_code, error_msg = callback_client.send_final_result_http(
         session.finalReport, 
@@ -95,6 +98,12 @@ def process_outbox_entry(session_id: str) -> bool:
     )
 
     duration = _now_ms() - start_ts
+
+    if success:
+        metrics.increment_callback_delivered()
+        metrics.record_callback_latency(duration)
+    else:
+        metrics.record_failed_callback(session_id)
 
     record = {
         "attempt": attempt_idx,

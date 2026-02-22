@@ -63,7 +63,7 @@ def build_final_payload(session: SessionState) -> dict:
     # Keep payload contract metadata here (not top-level).
     try:
         meta = {
-            "payloadVersion": getattr(settings, "CALLBACK_PAYLOAD_VERSION", "1.0.0"),
+            "payloadVersion": getattr(settings, "CALLBACK_PAYLOAD_VERSION", "1.1"),
             "contractVersion": getattr(settings, "CALLBACK_PAYLOAD_VERSION", "1.1"), # Objective 3
         }
         ei["_meta"] = meta

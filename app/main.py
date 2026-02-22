@@ -10,10 +10,11 @@ from app.intel.artifact_registry import snapshot_intent_map
 app = FastAPI(title="Agentic Honeypot API")
 
 # Allow cross-origin requests (useful if a web-based tester runs in the browser).
-# This is permissive by design for hackathon validation.
+# This is permissive by design for hackathon validation but restricted in prod via env.
+origins = [x.strip() for x in settings.CORS_ORIGINS.split(",") if x.strip()]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=origins,
     allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],

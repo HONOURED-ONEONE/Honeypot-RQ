@@ -105,6 +105,7 @@ class Settings:
     CQ_NO_DUPLICATE_WINDOW: int = int(os.getenv("CQ_NO_DUPLICATE_WINDOW", "2"))
 
     # Objective 8: Security & Privacy
+    CORS_ORIGINS: str = os.getenv("CORS_ORIGINS", "*")
     LOG_RETENTION_DAYS: int = int(os.getenv("LOG_RETENTION_DAYS", "180"))
     EVIDENCE_RETENTION_DAYS: int = int(os.getenv("EVIDENCE_RETENTION_DAYS", "365"))
     ENABLE_PII_REDACTION: bool = os.getenv("ENABLE_PII_REDACTION", "true").lower() == "true"

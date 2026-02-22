@@ -32,6 +32,9 @@ from datetime import datetime
 from app.utils.time import parse_timestamp_ms, now_ms, compute_engagement_seconds
 from app.utils.lock import session_lock
 from app.callback.payloads import build_final_payload
+import json
+from app.store.redis_conn import get_redis
+import app.observability.metrics as metrics
 
 
 def _coerce_history_items(history: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -523,6 +526,25 @@ def handle_event(req):
                 session.finalReport = final_payload
                 session.finalizedAt = now_ms()
                 session.state = "FINALIZED"
+                
+                # --- Objective 1: Update SLO metrics ---
+                try:
+                    metrics.increment_finalize_success()
+                    if session.sessionFirstSeenAtMs and int(session.sessionFirstSeenAtMs) > 0:
+                        metrics.record_finalize_latency(now_ms() - int(session.sessionFirstSeenAtMs))
+                except Exception:
+                    pass
+
+                # --- Objective 3: Persist last callback payload for debug ---
+                if settings.STORE_LAST_CALLBACK_PAYLOAD:
+                    try:
+                        get_redis().set(
+                            f"session:{session.sessionId}:last_callback_payload",
+                            json.dumps(final_payload),
+                            ex=86400
+                        )
+                    except Exception:
+                        pass
                 
                 # 3) Pass through the controller's reason so evaluator sees the specific gate
                 enqueue_guvi_final_result(session, finalize_reason=finalize_reason)
