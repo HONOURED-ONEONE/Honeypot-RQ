@@ -94,6 +94,7 @@ def decide_termination(*, session, controller_out: Optional[Dict[str, Any]] = No
     try:
         min_iocs = int(getattr(settings, "FINALIZE_MIN_IOC_CATEGORIES", 2) or 2)
         min_redflags = int(getattr(settings, "FINALIZE_MIN_REDFLAGS", 4) or 4)
+        min_turns_quality = int(getattr(settings, "CQ_MIN_TURNS", 8) or 8)
         
         ioc_count = _ioc_category_count(session)
         # Distinct red flags from history
@@ -102,20 +103,14 @@ def decide_termination(*, session, controller_out: Optional[Dict[str, Any]] = No
         
         # Logic: "DISTINCT IOC categories and/or DISTINCT red-flags".
         # We'll require BOTH to be safe, or make it flexible?
-        # The prompt says "and/or". Let's assume strict AND for high quality, OR if one is very high?
-        # Let's use AND as default behavior for "Quorum".
-        # Actually, "AND/OR" usually implies a config choice or a combined score.
-        # Let's stick to: if (IOCs >= MIN) OR (RedFlags >= MAX_RF AND IOCs >= 1)?
-        # Let's implement: IOCs >= MIN_IOCS  (RedFlags is usually secondary in this system).
-        # Wait, the objective says: "Evidence quorum met (configurable min of DISTINCT IOC categories and/or DISTINCT red-flags)."
-        # Let's trigger if IOCs met.
+        # Let's trigger if IOCs met, BUT gated by min turns to ensure Conversation Quality.
         
-        if ioc_count >= min_iocs:
+        if ioc_count >= min_iocs and turns >= min_turns_quality:
              # Check red flags if configured?
              # For now, if IOCs are good, we are good.
              return "evidence_quorum_iocs"
         
-        if distinct_rf >= min_redflags and ioc_count >= 1:
+        if distinct_rf >= min_redflags and ioc_count >= 1 and turns >= min_turns_quality:
              return "evidence_quorum_redflags"
 
     except Exception:

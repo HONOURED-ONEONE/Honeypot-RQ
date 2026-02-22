@@ -67,12 +67,12 @@ def test_finalize_min_turn_gate(mock_settings):
     session.extractedIntelligence.phoneNumbers = ["123"]
     session.extractedIntelligence.phishingLinks = ["http"]
     
-    with patch("app.core.finalize.settings", mock_settings):
+    with patch("app.core.termination.settings", mock_settings):
         # turnIndex = 0 < CQ_MIN_TURNS = 8
         assert should_finalize(session) is None
         
         session.turnIndex = 8
-        assert should_finalize(session) == "ioc_milestone"
+        assert should_finalize(session) == "evidence_quorum_iocs"
 
 def test_controller_cq_catchup_rail(mock_settings):
     session = SessionState(sessionId="test_rail")

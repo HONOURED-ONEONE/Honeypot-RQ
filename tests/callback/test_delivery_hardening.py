@@ -13,8 +13,8 @@ def mock_session():
         extractedIntelligence=Intelligence()
     )
 
-@patch("app.core.guvi_callback.send_final_result_sync")
-@patch("app.core.guvi_callback.get_queue")
+@patch("app.callback.sender.send_final_result_sync")
+@patch("app.queue.rq_conn.get_queue")
 def test_enqueue_hybrid_mode_sync_success(mock_get_queue, mock_send_sync, mock_session):
     # Setup
     settings.FINAL_OUTPUT_MODE = "hybrid"
@@ -28,8 +28,8 @@ def test_enqueue_hybrid_mode_sync_success(mock_get_queue, mock_send_sync, mock_s
     mock_get_queue.assert_not_called()
     assert mock_session.callbackStatus == "sent"
 
-@patch("app.core.guvi_callback.send_final_result_sync")
-@patch("app.core.guvi_callback.get_queue")
+@patch("app.callback.sender.send_final_result_sync")
+@patch("app.queue.rq_conn.get_queue")
 def test_enqueue_hybrid_mode_sync_fails_fallback_to_rq(mock_get_queue, mock_send_sync, mock_session):
     # Setup
     settings.FINAL_OUTPUT_MODE = "hybrid"
@@ -46,8 +46,8 @@ def test_enqueue_hybrid_mode_sync_fails_fallback_to_rq(mock_get_queue, mock_send
     mock_q.enqueue.assert_called_once()
     assert mock_session.callbackStatus == "queued"
 
-@patch("app.core.guvi_callback.send_final_result_sync")
-@patch("app.core.guvi_callback.get_queue")
+@patch("app.callback.sender.send_final_result_sync")
+@patch("app.queue.rq_conn.get_queue")
 def test_enqueue_rq_mode_skips_sync(mock_get_queue, mock_send_sync, mock_session):
     # Setup
     settings.FINAL_OUTPUT_MODE = "rq"
@@ -62,7 +62,7 @@ def test_enqueue_rq_mode_skips_sync(mock_get_queue, mock_send_sync, mock_session
     mock_get_queue.assert_called_once()
     assert mock_session.callbackStatus == "queued"
 
-@patch("app.core.guvi_callback.send_final_result_sync")
+@patch("app.callback.sender.send_final_result_sync")
 def test_enqueue_idempotency(mock_send_sync, mock_session):
     # Setup
     mock_session.callbackStatus = "sent"
