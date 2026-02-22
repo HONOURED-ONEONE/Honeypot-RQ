@@ -1,87 +1,53 @@
-# Admin API Reference
+# Admin API
 
-Base URL: `/admin`
-Headers: `x-admin-key: <ADMIN_API_KEY>`
+## `GET /admin/session/{id}`
 
-## 1. Session Snapshot
-**GET** `/session/{sessionId}`
+Returns a compact session snapshot:
 
-Returns a compact view of the session state, detection, and conversation quality metrics.
-
-**Response:**
 ```json
 {
-  "sessionId": "12345",
+  "sessionId": "abc123",
   "state": "FINALIZED",
   "scamDetected": true,
-  "scamType": "UPI_FRAUD",
-  "confidence": 0.95,
-  "finalizedAt": 1708560000123,
-  "reportId": "12345:1",
+  "scamType": "PHISHING",
+  "confidence": 0.92,
+  "finalizedAt": 1739999999000,
+  "reportId": "abc123:1",
   "callbackStatus": "sent",
   "cq": {
-    "questionsAsked": 8,
-    "relevantQuestions": 6,
+    "questionsAsked": 5,
+    "relevantQuestions": 4,
     "redFlagMentions": 5,
-    "elicitationAttempts": 6
+    "elicitationAttempts": 5
   },
+  "timeline": null,
   "outboxLedger": {
     "attempts": 1,
-    "status": "delivered",
-    "history": [...]
+    "history": [
+      {
+        "attempt": 1,
+        "ts": 1739999999000,
+        "duration": 320,
+        "code": 200,
+        "error": null,
+        "success": true,
+        "version": "1.1"
+      }
+    ],
+    "status": "delivered"
   },
-  "turnsEngaged": 10,
-  "durationSec": 120
+  "turnsEngaged": 8,
+  "durationSec": 76
 }
 ```
 
-## 2. Session Timeline
-**GET** `/session/{sessionId}/timeline`
+> RBAC: send `x-admin-key: <ADMIN_API_KEY>` when `ADMIN_RBAC_ENABLED=true`.
 
-Returns chronological events including messages, ignored post-finalization messages, and lifecycle events.
+## `GET /admin/session/{id}/timeline`
+Chronological event stream including conversation messages, postscript entries, and a `lifecycle_finalized` event when applicable.
 
-**Response:**
-```json
-[
-  {
-    "timestamp": 1708560000000,
-    "type": "message",
-    "sender": "scammer",
-    "content": "Hello, pay me now"
-  },
-  {
-    "timestamp": 1708560000123,
-    "type": "lifecycle_finalized",
-    "reportId": "12345:1",
-    "reason": "evidence_quorum_iocs"
-  },
-  {
-    "timestamp": 1708560005000,
-    "type": "postscript_message",
-    "sender": "scammer",
-    "content": "Are you there?",
-    "ignored": true
-  }
-]
-```
+## `GET /admin/callbacks?sessionId={id}`
+Idempotency ledger and last finalized payload preview.
 
-## 3. SLO Metrics
-**GET** `/slo`
-
-Returns real-time operational metrics for finalization and callbacks.
-
-**Response:**
-```json
-{
-  "finalize_success_rate": 1.0,
-  "finalize_count": 42,
-  "p50_finalize_latency": 45000,
-  "p95_finalize_latency": 120000,
-  "target_finalize_latency": 100000,
-  "callback_delivery_success_rate": 0.98,
-  "p95_callback_delivery_latency": 1500,
-  "target_callback_latency": 5000,
-  "recent_failed_callbacks": ["sess-abc-failed"],
-  "sessions_waiting_for_report": []
-}
-```
+## `GET /admin/slo`
+See [admin-observability.md](./admin-observability.md) for field details.

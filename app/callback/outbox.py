@@ -111,7 +111,9 @@ def process_outbox_entry(session_id: str) -> bool:
         "duration": duration,
         "code": status_code,
         "error": error_msg,
-        "success": success
+        "success": success,
+        # Track the payload/contract version used for this delivery attempt (observability / A/B)
+        "version": str(getattr(settings, "CALLBACK_PAYLOAD_VERSION", "1.1")),
     }
     ledger.setdefault("history", []).append(record)
     ledger["attempts"] = attempt_idx

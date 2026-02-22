@@ -48,7 +48,7 @@ def test_slo_metrics(mock_get_redis, skip_auth):
     def get_side_effect(k):
         return {
             "metrics:finalize:success": "10",
-            "metrics:finalize:attempts": "12",
+            "metrics:finalize:attempt": "12",
             "metrics:callback:delivered": "9",
             "metrics:callback:attempts": "10",
         }.get(k)
@@ -57,9 +57,9 @@ def test_slo_metrics(mock_get_redis, skip_auth):
     # samples (lrange)
     def lrange_side_effect(k, start, end):
         return {
-            "metrics:finalize:latency:samples": ["1000", "2000", "3000"],
-            "metrics:callback:latency:samples": ["100", "200", "300"],
-            "metrics:callback:failed:recent": ["sess-1"],
+            "metrics:finalize:latencies": ["1000", "2000", "3000"],
+            "metrics:callback:latencies": ["100", "200", "300"],
+            "metrics:callback:failed_recent": ["sess-1"],
         }.get(k, [])
     mr.lrange.side_effect = lrange_side_effect
     
@@ -67,12 +67,12 @@ def test_slo_metrics(mock_get_redis, skip_auth):
     assert resp.status_code == 200
     data = resp.json()
     
-    # 10/12 = 0.83
-    assert data["finalize_success_rate"] == 0.83
-    # 9/10 = 0.90
-    assert data["callback_delivery_success_rate"] == 0.9
-    # p50 of [1000, 2000, 3000] -> 2000
-    assert data["p50_finalize_latency"] == 2000
+    # 10/12 * 100 = 83.333...
+    assert abs(data["finalize_success_rate"] - 83.33) < 0.1
+    # 9/10 * 100 = 90.0
+    assert data["callback_delivery_success_rate"] == 90.0
+    # p50 of [1000, 2000, 3000] ms -> 2.0 s
+    assert data["p50_finalize_latency"] == 2.0
     assert "sess-1" in data["recent_failed_callbacks"]
 
 def test_rbac_enforcement():

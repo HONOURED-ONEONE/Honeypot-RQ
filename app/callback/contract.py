@@ -122,6 +122,10 @@ def sanitize_final_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
     ei["_signals"] = ei_in.get("_signals") if isinstance(ei_in.get("_signals"), dict) else {}
     ei["_meta"] = ei_in.get("_meta") if isinstance(ei_in.get("_meta"), dict) else {}
 
+    # Preserve dynamicArtifacts if present (for experimental/runtime IOCs)
+    if "dynamicArtifacts" in ei_in:
+        ei["dynamicArtifacts"] = ei_in["dynamicArtifacts"]
+
     out["extractedIntelligence"] = ei
 
     return out

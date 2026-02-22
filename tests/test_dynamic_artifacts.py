@@ -3,7 +3,7 @@ from unittest.mock import MagicMock, patch
 from app.store.models import SessionState, Intelligence
 from app.intel.artifact_registry import artifact_registry
 from app.intel.extractor import update_intelligence_from_text
-from app.core.finalize import _ioc_category_count
+from app.core.termination import _ioc_category_count
 from app.callback.payloads import build_final_payload
 from app.core.broken_flow_controller import choose_next_action
 from app.llm.responder import generate_agent_reply
@@ -65,7 +65,7 @@ def test_responder_uses_instruction():
     session = SessionState(sessionId="test-session")
     
     # Mock chat_completion to avoid actual LLM calls
-    with patch("app.llm.responder.chat_completion", return_value="Rephrased reply") as mock_llm:
+    with patch("app.llm.responder.chat_completion", return_value="Rephrased reply?") as mock_llm:
         # Enable rephrase
         with patch.object(settings, "BF_LLM_REPHRASE", True):
             reply = generate_agent_reply(MagicMock(), session, "INT_ACK_CONCERN", instruction="Do specific thing")
@@ -74,4 +74,4 @@ def test_responder_uses_instruction():
             args, _ = mock_llm.call_args
             prompt_text = args[1] # user prompt is 2nd arg
             assert "Do specific thing" in prompt_text
-            assert reply == "Rephrased reply"
+            assert reply == "Rephrased reply?"
