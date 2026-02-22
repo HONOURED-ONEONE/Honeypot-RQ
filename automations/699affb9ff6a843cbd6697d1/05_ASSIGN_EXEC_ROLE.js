@@ -1,9 +1,9 @@
-// 05_ASSIGN_EXEC_ROLE - Assign Value Dashboard to Executive role, emit audit, log all outcomes, DRY_RUN aware
+// 05_ASSIGN_EXEC_ROLE - Assign Value Dashboard to Executive role, emit audit, log all outcomes, DRY_RUN aware, support visibility PATCH path override
 const axios = require("axios")
 
 ;(async () => {
   const env = process.env
-  const { TURBOTIC_API_BASE, TURBOTIC_API_TOKEN, DASHBOARD_ID, DASHBOARD_NAME, ROLE_EXECUTIVE, DRY_RUN } = env
+  const { TURBOTIC_API_BASE, TURBOTIC_API_TOKEN, DASHBOARD_ID, DASHBOARD_NAME, ROLE_EXECUTIVE, DRY_RUN, TURBOTIC_DASHBOARD_VIS_PATCH } = env
   const dryRun = String(DRY_RUN).toLowerCase() === "true"
   if (!DASHBOARD_ID || !ROLE_EXECUTIVE || !TURBOTIC_API_BASE || !TURBOTIC_API_TOKEN) {
     setContext("value_dashboard.visibility_status", "error_missing_env")
@@ -23,9 +23,7 @@ const axios = require("axios")
   }
 
   const api = axios.create({ baseURL: TURBOTIC_API_BASE, headers: { Authorization: `Bearer ${TURBOTIC_API_TOKEN}` }, timeout: 10000 })
-  let roleId,
-    dashboardFound = false,
-    patchOk = false
+  let roleId
   try {
     // 1. Fetch roles, find ROLE_EXECUTIVE
     const rolesRes = await api.get("/roles")
@@ -37,7 +35,8 @@ const axios = require("axios")
       process.exit(1)
     }
     roleId = roleObj.id
-    // 2. PATCH dashboard visibility (could PATCH /dashboards/{id} or PUT /dashboards/{id}/visibility)
+    // Choose PATCH path
+    const visPatchPath = TURBOTIC_DASHBOARD_VIS_PATCH || `/dashboards/${DASHBOARD_ID}/visibility`
     const visPatch = {
       id: DASHBOARD_ID,
       visibility: [roleId]
@@ -46,17 +45,18 @@ const axios = require("axios")
       patchRes
     for (let i = 0; i < 3; ++i) {
       try {
-        patchRes = await api.patch(`/dashboards/${DASHBOARD_ID}/visibility`, visPatch)
+        patchRes = await api.patch(visPatchPath, visPatch)
         visOk = true
         break
       } catch (e) {
         if (i === 2) throw e
-        await new Promise(r => setTimeout(r, 700 * i))
+        await new Promise(r => setTimeout(r, 700 * (i + 1)))
       }
     }
     if (!visOk || !patchRes || !patchRes.status || patchRes.status >= 300) {
       emit("error_patch_visibility")
-      console.error(JSON.stringify({ step: "05_ASSIGN_EXEC_ROLE", result: "fail", reason: "patch_visibility", ts: new Date().toISOString(), res: patchRes && patchRes.data }))
+      let details = patchRes && patchRes.data ? patchRes.data : "patch failed"
+      console.error(JSON.stringify({ step: "05_ASSIGN_EXEC_ROLE", result: "fail", reason: "patch_visibility", ts: new Date().toISOString(), res: details }))
       process.exit(1)
     }
     emit("granted")
@@ -80,7 +80,9 @@ const axios = require("axios")
     console.log(JSON.stringify({ step: "05_ASSIGN_EXEC_ROLE", result: "granted", dashId: DASHBOARD_ID, role: ROLE_EXECUTIVE, ts: new Date().toISOString() }))
   } catch (e) {
     emit("error")
-    console.error(JSON.stringify({ step: "05_ASSIGN_EXEC_ROLE", result: "fail", ts: new Date().toISOString(), error: String(e) }))
+    let details = e && e.message ? e.message : String(e)
+    if (e.response && e.response.data) details = e.response.data
+    console.error(JSON.stringify({ step: "05_ASSIGN_EXEC_ROLE", result: "fail", ts: new Date().toISOString(), error: details }))
     process.exit(1)
   }
 })()

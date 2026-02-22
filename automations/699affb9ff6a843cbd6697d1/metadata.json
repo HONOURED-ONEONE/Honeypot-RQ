@@ -1,16 +1,16 @@
 {
   "automationId": "699affb9ff6a843cbd6697d1",
   "automationName": "Unnamed Automation",
-  "version": "v1",
+  "version": "v2",
   "mode": "multi-file",
   "dependencies": [
     {
-      "id": "1771767834714_8",
+      "id": "1771772941552_28",
       "name": "axios",
       "version": "latest"
     },
     {
-      "id": "1771767834714_9",
+      "id": "1771772941552_29",
       "name": "crypto",
       "version": "latest"
     }
@@ -22,7 +22,27 @@
     "TURBOTIC_OPERATOR_ID",
     "PARTNER_ENDPOINT",
     "EVIDENCE_STORE_ENDPOINT",
-    "OPERATOR_ACTION"
+    "OPERATOR_ACTION",
+    "DASHBOARD_ID",
+    "DASHBOARD_NAME",
+    "DASHBOARD_DESC",
+    "ROLE_EXECUTIVE",
+    "SRC_INTAKE",
+    "SRC_CASE_EXEC",
+    "SRC_CB_SLO",
+    "SRC_FIN_SLO",
+    "SRC_EVID_AUD",
+    "TURBOTIC_API_BASE",
+    "TURBOTIC_API_TOKEN",
+    "DRY_RUN",
+    "UPSERT_MODE",
+    "REFRESH_SECONDS",
+    "P95_FINALIZE_WARN",
+    "P95_FINALIZE_CRIT",
+    "CB_SUCCESS_WARN",
+    "CB_SUCCESS_CRIT",
+    "CB_P95_WARN",
+    "CB_P95_CRIT"
   ],
-  "syncedAt": "2026-02-22T15:15:43.187Z"
+  "syncedAt": "2026-02-22T15:56:22.343Z"
 }
