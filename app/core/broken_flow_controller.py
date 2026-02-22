@@ -398,6 +398,16 @@ def choose_next_action(
     target_key = None
     force_finalize = False
     reason = "normal_flow"
+    
+    # ✅ NO-NEW-IOC Pivot: if stagnant for N turns, force a pivot to new intel
+    try:
+        no_new_limit = int(getattr(settings, "NO_NEW_IOC_TURNS", 2) or 2)
+        if session.bf_no_progress_count >= no_new_limit and session.bf_no_progress_count < settings.BF_NO_PROGRESS_TURNS:
+             # Pivot to something missing
+             intent, target_key = _pick_missing_intel_target(intel_dict, session.bf_recent_intents, session.scam_type)
+             reason = "no_new_ioc_pivot"
+    except Exception:
+        pass
 
     # ------------------------------------------------------------
     # Anti-redundancy helpers (category cooldown + satisfied guard)
@@ -605,6 +615,23 @@ def choose_next_action(
 
         intent = _constrain(intent)
 
+        # ✅ NO-NEW-IOC Pivot Override: If we are stagnant on intel, force a shift to a missing target
+        # unless we are already finalizing or ACK-gating handles it.
+        try:
+            no_new_limit = int(getattr(settings, "NO_NEW_IOC_TURNS", 2) or 2)
+            # Only trigger if not already finalizing and we have stagnant progress
+            if (not force_finalize) and session.bf_no_progress_count >= no_new_limit:
+                # Pick a target that is strictly missing from intel
+                piv_intent, piv_key = _pick_missing_intel_target(intel_dict, session.bf_recent_intents, session.scam_type)
+                # Apply if it's a valid investigative intent (not ACK)
+                if piv_intent and piv_intent != INT_ACK_CONCERN:
+                    intent = piv_intent
+                    target_key = piv_key
+                    reason = "no_new_ioc_pivot"
+                    intent = _constrain(intent)
+        except Exception:
+            pass
+
         # ------------------------------------------------------------
         # Fix B: ACK gating (allow INT_ACK_CONCERN at most once per session)
         # ------------------------------------------------------------
@@ -626,7 +653,12 @@ def choose_next_action(
         # ----------------------------
         otp_recent = _otp_pressure_count(session, _OTP_PRESSURE_WINDOW)
         got_phone = bool(intel_dict.get("phoneNumbers"))
-        if otp_recent >= _OTP_PRESSURE_THRESHOLD:
+        
+        # ✅ State-aware threshold: if escalated (S4/S5), lower tolerance
+        is_escalated = (session.bf_state in (BF_S4, BF_S5))
+        otp_thr = int(getattr(settings, "ESCALATED_OTP_THRESHOLD", 1) or 1) if is_escalated else int(getattr(settings, "NORMAL_OTP_THRESHOLD", 2) or 2)
+        
+        if otp_recent >= otp_thr:
             # First assert boundary once; if already asserted, steer to helpline (non-procedural) again
             if not session.bf_policy_refused_once:
                 intent = INT_REFUSE_SENSITIVE_ONCE

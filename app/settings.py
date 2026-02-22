@@ -79,4 +79,33 @@ class Settings:
     # Store the last payload per session under a debug key in Redis for retrieval
     STORE_LAST_CALLBACK_PAYLOAD: bool = os.getenv("STORE_LAST_CALLBACK_PAYLOAD", "true").lower() == "true"
 
+    # Objective 1: Finalization FSM + Watchdog
+    FINALIZE_MIN_REDFLAGS: int = int(os.getenv("FINALIZE_MIN_REDFLAGS", "4"))
+    FINALIZE_INACTIVITY_SECONDS: int = int(os.getenv("FINALIZE_INACTIVITY_SECONDS", "30"))
+    FINALIZE_FORCE_ON_ESCALATION: bool = os.getenv("FINALIZE_FORCE_ON_ESCALATION", "true").lower() == "true"
+
+    # Objective 2: Idempotent Callback + Outbox
+    CALLBACK_MAX_ATTEMPTS: int = int(os.getenv("CALLBACK_MAX_ATTEMPTS", "12"))
+    CALLBACK_BASE_DELAY_MS: int = int(os.getenv("CALLBACK_BASE_DELAY_MS", "1000"))
+    CALLBACK_MAX_DELAY_MS: int = int(os.getenv("CALLBACK_MAX_DELAY_MS", "3600000"))
+    CALLBACK_DLQ_TTL_DAYS: int = int(os.getenv("CALLBACK_DLQ_TTL_DAYS", "7"))
+
+    # Objective 5: Enhanced Intelligence Extraction
+    EXTRACTION_ID_ENABLED: bool = os.getenv("EXTRACTION_ID_ENABLED", "true").lower() == "true"
+    NO_NEW_IOC_TURNS: int = int(os.getenv("NO_NEW_IOC_TURNS", "2"))
+
+    # Objective 6: Sensitive-Action Refusal & Budget
+    ESCALATED_OTP_THRESHOLD: int = int(os.getenv("ESCALATED_OTP_THRESHOLD", "1"))
+    NORMAL_OTP_THRESHOLD: int = int(os.getenv("NORMAL_OTP_THRESHOLD", "2"))
+    CQ_MIN_REDFLAGS: int = int(os.getenv("CQ_MIN_REDFLAGS", "6"))
+    CQ_NO_DUPLICATE_WINDOW: int = int(os.getenv("CQ_NO_DUPLICATE_WINDOW", "2"))
+
+    # Objective 8: Security & Privacy
+    LOG_RETENTION_DAYS: int = int(os.getenv("LOG_RETENTION_DAYS", "180"))
+    EVIDENCE_RETENTION_DAYS: int = int(os.getenv("EVIDENCE_RETENTION_DAYS", "365"))
+    ENABLE_PII_REDACTION: bool = os.getenv("ENABLE_PII_REDACTION", "true").lower() == "true"
+    ADMIN_RBAC_ENABLED: bool = os.getenv("ADMIN_RBAC_ENABLED", "true").lower() == "true"
+    # Used for rudimentary RBAC/ABAC if enabled
+    ADMIN_API_KEY: str = os.getenv("ADMIN_API_KEY", "")
+
 settings = Settings()

@@ -64,6 +64,7 @@ def build_final_payload(session: SessionState) -> dict:
     try:
         meta = {
             "payloadVersion": getattr(settings, "CALLBACK_PAYLOAD_VERSION", "1.0.0"),
+            "contractVersion": getattr(settings, "CALLBACK_PAYLOAD_VERSION", "1.1"), # Objective 3
         }
         ei["_meta"] = meta
     except Exception:
@@ -85,7 +86,8 @@ def build_final_payload(session: SessionState) -> dict:
 
     try:
         algo = getattr(settings, "PAYLOAD_FINGERPRINT_ALGO", "sha256").lower()
-        canonical = json.dumps(extracted, sort_keys=True, separators=(",", ":"))
+        # Canonicalization: Sort keys, separators=(",", ":") for compact JSON
+        canonical = json.dumps(extracted, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
         h = hashlib.new(algo)
         h.update(canonical.encode("utf-8"))
         # Store fingerprint under extractedIntelligence._meta (allowed zone)

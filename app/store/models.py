@@ -32,10 +32,25 @@ class SessionState:
     totalMessagesExchanged: int = 0
 
     # State
-    state: str = "INIT"  # INIT/MONITORING/ENGAGED/READY_TO_REPORT/REPORTED/CLOSED
+    state: str = "INIT"  # INIT/MONITORING/ENGAGED/READY_TO_REPORT/REPORTED/CLOSED/FINALIZED
     scamDetected: bool = False
     confidence: float = 0.0
     scamType: Optional[str] = None
+
+    # Objective 1: FSM & Finalization
+    finalizedAt: Optional[int] = None
+    finalReport: Optional[dict] = None
+    lastIocAtMs: int = 0
+    
+    # Objective 2: Outbox & Report Identity
+    reportId: Optional[str] = None
+    reportSequence: int = 0
+    contractVersion: Optional[str] = None
+    outboxEntry: Optional[dict] = None  # Stores the latest attempt ledger
+
+    # Objective 4: Single-Writer
+    # postscript: events/logs arriving after FINALIZED state (immutable history)
+    postscript: List[dict] = field(default_factory=list)
 
     # --- Detector evidence (for agentNotes summarization) ---
     # Persisted to make agentNotes deterministic and consistent across callback time.

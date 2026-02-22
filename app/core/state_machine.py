@@ -19,6 +19,10 @@ READY_TO_REPORT = "READY_TO_REPORT"
 # Interaction Surface: Post-Processing / Callback Dispatch
 REPORTED = "REPORTED"
 
+# Interaction Surface: Terminal State (Latch-and-Drain)
+# Expected Artifact Yield: None (Immutable)
+FINALIZED = "FINALIZED"
+
 # Interaction Surface: Terminal State
 CLOSED = "CLOSED"
 

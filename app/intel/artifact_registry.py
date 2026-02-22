@@ -25,11 +25,17 @@ class ArtifactSpec:
 # -----------------
 # Conservative patterns with explicit prefixes to reduce false positives.
 # Case IDs: REF/CASE/TICKET + 4–12 A-Z0-9
-# Policy: POLICY/POL/INS + 6–16 A-Z0-9
-# Order: ORDER/ORD + 6–16 A-Z0-9
-# CASE: e.g., REF-987654 or CASE-AB12
+# Enhanced per Objective 5: ORG-YEAR-SEQUENCE, ORG-SEQUENCE, ALPHA{1,4}\d{6,12}
 _CASE_ID_RE = re.compile(
-    r'(?<![A-Z0-9])(?:REF|CASE|TKT|SR)[-\s]?[A-Z0-9]{4,12}(?![A-Z0-9])',
+    r'(?<![A-Z0-9])(?:'
+    r'(?:REF|CASE|TKT|SR|ID|NO)[-\s]?[A-Z0-9]{4,12}'
+    r'|'
+    r'[A-Z]{2,5}-(?:19|20)\d{2}-\d{3,12}'  # ORG-YEAR-SEQUENCE (e.g. ITR-2024-789)
+    r'|'
+    r'[A-Z]{2,5}-\d{6,12}'                 # ORG-SEQUENCE (e.g. AMZ-00123)
+    r'|'
+    r'[A-Z]{1,4}\d{6,12}'                  # ALPHA+DIGITS (bounded length)
+    r')(?![A-Z0-9])',
     re.I
 )
 # POLICY: e.g., POL-12345678 (typical insurer style)

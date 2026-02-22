@@ -3,6 +3,7 @@ from fastapi import Request
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from app.api.routes import router
+from app.api.admin_routes import router as admin_router
 from app.settings import settings
 from app.intel.artifact_registry import snapshot_intent_map
 
@@ -19,6 +20,7 @@ app.add_middleware(
 )
 
 app.include_router(router)
+app.include_router(admin_router)
 
 
 @app.get("/")
