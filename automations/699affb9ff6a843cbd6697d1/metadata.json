@@ -1,16 +1,16 @@
 {
   "automationId": "699affb9ff6a843cbd6697d1",
   "automationName": "Unnamed Automation",
-  "version": "v2",
+  "version": "v3",
   "mode": "multi-file",
   "dependencies": [
     {
-      "id": "1771772941552_28",
+      "id": "1771775426667_34",
       "name": "axios",
       "version": "latest"
     },
     {
-      "id": "1771772941552_29",
+      "id": "1771775426667_35",
       "name": "crypto",
       "version": "latest"
     }
@@ -19,6 +19,8 @@
     "ORCHESTRATOR_BASE_URL",
     "ORCHESTRATOR_API_KEY",
     "SESSION_ID",
+    "HONEYPOT_BASE_URL",
+    "HONEYPOT_ADMIN_KEY",
     "TURBOTIC_OPERATOR_ID",
     "PARTNER_ENDPOINT",
     "EVIDENCE_STORE_ENDPOINT",
@@ -42,7 +44,11 @@
     "CB_SUCCESS_WARN",
     "CB_SUCCESS_CRIT",
     "CB_P95_WARN",
-    "CB_P95_CRIT"
+    "CB_P95_CRIT",
+    "TURBOTIC_DASHBOARD_GET",
+    "TURBOTIC_DASHBOARD_PATCH",
+    "TURBOTIC_DASHBOARD_POST",
+    "TURBOTIC_DASHBOARD_VIS_PATCH"
   ],
-  "syncedAt": "2026-02-25T05:45:50.776Z"
+  "syncedAt": "2026-02-25T05:59:49.725Z"
 }
