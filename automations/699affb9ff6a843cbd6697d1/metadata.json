@@ -1,7 +1,7 @@
 {
   "automationId": "699affb9ff6a843cbd6697d1",
   "automationName": "Unnamed Automation",
-  "version": "v10",
+  "version": "v11",
   "mode": "multi-file",
   "dependencies": [
     {
@@ -38,10 +38,7 @@
     "TURBOTIC_API_TOKEN",
     "DRY_RUN",
     "UPSERT_MODE",
-    "TURBOTIC_DASHBOARD_GET",
-    "TURBOTIC_DASHBOARD_PATCH",
-    "TURBOTIC_DASHBOARD_POST",
     "TURBOTIC_DASHBOARD_VIS_PATCH"
   ],
-  "syncedAt": "2026-02-25T10:14:15.389Z"
+  "syncedAt": "2026-02-25T10:17:43.891Z"
 }
