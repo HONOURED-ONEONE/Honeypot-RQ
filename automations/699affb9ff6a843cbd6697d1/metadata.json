@@ -1,7 +1,7 @@
 {
   "automationId": "699affb9ff6a843cbd6697d1",
   "automationName": "Unnamed Automation",
-  "version": "v21",
+  "version": "v22",
   "mode": "multi-file",
   "dependencies": [
     {
@@ -26,7 +26,10 @@
     "OPERATOR_ACTION",
     "API_KEY",
     "SESSION_ID",
-    "SINCE_MINUTES"
+    "SINCE_MINUTES",
+    "ORCHESTRATOR_BASE_URL",
+    "ORCHESTRATOR_API_KEY",
+    "TURBOTIC_OPERATOR_ID"
   ],
-  "syncedAt": "2026-02-25T16:22:17.320Z"
+  "syncedAt": "2026-02-25T16:23:28.711Z"
 }
