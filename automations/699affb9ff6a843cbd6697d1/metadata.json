@@ -1,11 +1,11 @@
 {
   "automationId": "699affb9ff6a843cbd6697d1",
   "automationName": "Unnamed Automation",
-  "version": "v25",
+  "version": "v26",
   "mode": "multi-file",
   "dependencies": [
     {
-      "id": "1772036547587_13",
+      "id": "1772068957030_12",
       "name": "axios",
       "version": "latest"
     }
@@ -16,11 +16,12 @@
     "P95_FINALIZE_WARN",
     "CB_SUCCESS_WARN",
     "CB_P95_WARN",
+    "REDIS_URL",
     "EVIDENCE_STORE_ENDPOINT",
     "PARTNER_ENDPOINT",
     "SESSION_ID",
     "SINCE_MINUTES",
     "DRY_RUN"
   ],
-  "syncedAt": "2026-02-26T01:21:34.124Z"
+  "syncedAt": "2026-02-26T01:23:32.266Z"
 }
